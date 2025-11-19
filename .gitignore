@@ -1,0 +1,60 @@
+# Databases
+*.duckdb
+*.db
+*.sqlite
+*.sqlite3
+
+# Generated data files
+*.csv
+*.parquet
+*.pkl
+*.pickle
+
+# Generated outputs
+outputs_*/
+logs/
+*.log
+
+# Model checkpoints and weights
+*.pt
+*.pth
+*.ckpt
+*.weights
+*.h5
+*.npz
+*.npy
+
+# Training outputs and checkpoints
+**/checkpoints/
+**/outputs/checkpoints/
+**/outputs/models/
+**/checkpoint/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+
+# Environment files
+.env
+.venv/
+venv/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.temp
+node_modules/
+parametric/.pgdata/
