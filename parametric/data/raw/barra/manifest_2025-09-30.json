@@ -1,0 +1,14 @@
+{
+  "as_of": "2025-09-30",
+  "artifacts": [
+    "factor_returns_csv",
+    "factor_returns_parquet",
+    "style_exposures_csv",
+    "style_exposures_parquet"
+  ],
+  "formats": [
+    "csv",
+    "parquet"
+  ],
+  "portfolio_top_n": 100
+}

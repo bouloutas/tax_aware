@@ -1,0 +1,62 @@
+{
+  "release_date": "2025-09-30",
+  "imported_files": [
+    "factor_covariance_2025-09-30.csv",
+    "factor_returns_2025-09-30.csv",
+    "style_exposures_2025-09-30.csv",
+    "specific_risk_2025-09-30.csv",
+    "portfolio_summary_2025-09-30.csv"
+  ],
+  "data_summary": {
+    "factor_covariance": {
+      "rows": 1000,
+      "columns": [
+        "month_end_date",
+        "factor_i",
+        "factor_j",
+        "covariance"
+      ],
+      "file_size_mb": 4.32
+    },
+    "factor_returns": {
+      "rows": 227,
+      "columns": [
+        "month_end_date",
+        "factor",
+        "factor_return"
+      ],
+      "file_size_mb": 0.01
+    },
+    "style_exposures": {
+      "rows": 1000,
+      "columns": [
+        "month_end_date",
+        "gvkey",
+        "factor",
+        "exposure",
+        "flags"
+      ],
+      "file_size_mb": 0.73
+    },
+    "specific_risk": {
+      "rows": 1000,
+      "columns": [
+        "month_end_date",
+        "gvkey",
+        "specific_var"
+      ],
+      "file_size_mb": 0.05
+    },
+    "portfolio_summary": {
+      "rows": 12,
+      "columns": [
+        "factor",
+        "portfolio_exposure",
+        "variance_contribution",
+        "type",
+        "top_n"
+      ],
+      "file_size_mb": 0.0
+    }
+  }
+}

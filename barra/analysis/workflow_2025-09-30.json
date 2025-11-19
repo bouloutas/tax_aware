@@ -1,0 +1,151 @@
+{
+  "as_of": "2025-09-30",
+  "rebuild_analytics": false,
+  "pipeline": "completed",
+  "qa": {
+    "failures": [],
+    "results": [
+      [
+        "table_exists:fundamentals_annual",
+        true,
+        "present"
+      ],
+      [
+        "table_exists:fundamentals_quarterly",
+        true,
+        "present"
+      ],
+      [
+        "table_exists:monthly_prices",
+        true,
+        "present"
+      ],
+      [
+        "table_exists:monthly_returns",
+        true,
+        "present"
+      ],
+      [
+        "table_exists:market_index_returns",
+        true,
+        "present"
+      ],
+      [
+        "table_exists:gvkey_ticker_mapping",
+        true,
+        "present"
+      ],
+      [
+        "table_exists:style_factor_exposures",
+        true,
+        "present"
+      ],
+      [
+        "table_exists:industry_exposures",
+        true,
+        "present"
+      ],
+      [
+        "table_exists:country_exposures",
+        true,
+        "present"
+      ],
+      [
+        "table_exists:factor_returns",
+        true,
+        "present"
+      ],
+      [
+        "table_exists:specific_returns",
+        true,
+        "present"
+      ],
+      [
+        "table_exists:specific_risk",
+        true,
+        "present"
+      ],
+      [
+        "table_exists:factor_covariance",
+        true,
+        "present"
+      ],
+      [
+        "latest_monthly_return_date",
+        true,
+        "latest=2025-10-27"
+      ],
+      [
+        "row_counts_snapshot",
+        true,
+        "OrderedDict([('fundamentals_annual', 533778), ('fundamentals_quarterly', 2063923), ('monthly_prices', 251255), ('monthly_returns', 251248), ('market_index_returns', 1520), ('gvkey_ticker_mapping', 2388), ('style_factor_exposures', 2403870), ('industry_exposures', 743832), ('country_exposures', 247944), ('factor_returns', 45224), ('specific_returns', 245556), ('specific_risk', 245556), ('factor_covariance', 4438637)])"
+      ],
+      [
+        "style_exposures_no_null",
+        true,
+        "null_rows=0"
+      ],
+      [
+        "industry_one_hot",
+        true,
+        "[]"
+      ],
+      [
+        "country_exposure_sum",
+        true,
+        "bad_rows=0"
+      ],
+      [
+        "imputation_share_under_threshold",
+        true,
+        "share=0.137, flagged=1980, total=14440"
+      ],
+      [
+        "style_exposures_present",
+        true,
+        "rows=14440"
+      ],
+      [
+        "factor_mean_centered",
+        true,
+        []
+      ],
+      [
+        "factor_std_reasonable",
+        true,
+        []
+      ],
+      [
+        "factor_count_consistency",
+        true,
+        "rows=227, unique=227"
+      ],
+      [
+        "specific_counts_align",
+        true,
+        "universe=1442, specific_returns=1442, specific_risk=1442"
+      ],
+      [
+        "residual_mean_near_zero",
+        true,
+        "mean=0.0026765875369652893"
+      ],
+      [
+        "residual_variance_positive",
+        true,
+        "var=0.015964881836456318"
+      ],
+      [
+        "covariance_dimension",
+        true,
+        "cov_rows=55225, expected=55225"
+      ],
+      [
+        "covariance_symmetry",
+        true,
+        "missing_sym_pairs=0"
+      ]
+    ]
+  },
+  "release_dir": "exports/releases/2025-09-30"
+}
