@@ -6,10 +6,23 @@ This project replicates the Compustat database (`compustat.duckdb`) by extractin
 
 **Status:** Pipeline Operational ✅ | Scaling Up ⏳
 
+## Latest Update — 2025-11-19
+
+- Added chronological sorting plus fiscal YTD-to-quarter conversion so quarterly inserts now include 10-K (fiscal Q4) filings and subtract prior YTD values.
+- Enabled 10-K ingestion in the financial loader while still filtering out filings without a document period end date.
+- Reset YTD history per population run to prevent cross-company bleed-through.
+- Removed heuristic fillers for thinly-defined Compustat items (for example CSTKQ, FCAQ, OLMIQ) so only filing-sourced values persist.
+- Added preferred-source mappings for RCDQ/PRCRAQ/CSHOPQ/TXDITCQ/OCI fields to pull the exact XBRL tags present in MSFT/NVDA filings.
+
+- Recomputed core EPS items (basic, diluted, fully diluted) from quarter-level net income and share counts so annualized values stop inheriting YTD noise.
+- Added signed receivable/allowance mapping (RCDQ/PRCRAQ/RCPQ/RCAQ) and pushed negative contra-asset handling into the parser.
+- Wired OCI + operating lease tags directly into Compustat items (AOCIDERGLQ/CIDERGLQ/OLMIQ/OLMTQ/MSAQ) and introduced par-value driven CSTKQ/CSTKCVQ derivations.
+
 ## Documentation
 
 - **[PRD.md](PRD.md)** - Product Requirements Document with detailed specifications
 - **[PROJECT_STATUS.md](PROJECT_STATUS.md)** - Current project status and progress tracking
+- **[PROJECT_STATE_2025_11_19.md](PROJECT_STATE_2025_11_19.md)** - **CURRENT STATE** - Detailed state snapshot for session continuation
 
 ## Quick Start
 

@@ -108,3 +108,10 @@
 - CIK values in Compustat include leading zeros (e.g., '0001434614')
 - Need to strip leading zeros when matching with SEC EDGAR CIKs
 
+## 2025-11-19 Pilot Snapshot
+
+- **Quarter coverage:** financial loader now ingests both 10-Q and 10-K filings, sorts them chronologically, and converts YTD values to true quarterly figures (MSFT now shows all FY22-FY24 quarters).
+- **Heuristic removal:** removed the placeholder multipliers for CSTKQ/FCAQ/OLMIQ/etc.; only filing-sourced values persist.
+- **Preferred tag mapping:** added explicit mappings for `RCDQ`, `PRCRAQ`, `CSHOPQ`, `TXDITCQ`, and OCI-related items to target precise XBRL tags.
+- **Validation:** `validate_data_accuracy.py` now shows MSFT at **17.2%** (294 items, 1,451 comparisons) and NVDA at **4.0%** (279 items, 1,310 comparisons). Receivable allowances flipped to negative, OCI/lease mapping is wired, and CSTKQ is derived from share counts, but OCI + lease balances still drive most mismatches.
+

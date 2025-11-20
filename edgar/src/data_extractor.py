@@ -489,12 +489,13 @@ class DataExtractor:
         logger.info("Populating financial tables...")
         count = 0
         skipped = 0
-        allowed_types = ('10-K', '10-Q')
+        allowed_types = ('10-Q', '10-K')
+
+        mapped_records = []
         for data in extracted_data:
             filing_type = (data.get('filing_type') or '').upper()
             period_end = data.get('document_period_end_date')
 
-            # Only include 10-K/10-Q filings with a valid period end date
             if not filing_type or not any(ft in filing_type for ft in allowed_types):
                 skipped += 1
                 continue
@@ -504,8 +505,21 @@ class DataExtractor:
 
             mapped = self.financial_mapper.map_financial_data(data)
             if mapped:
-                self.financial_mapper.insert_financial_data(mapped)
-                count += 1
+                mapped_records.append(mapped)
+
+        mapped_records.sort(key=lambda m: (
+            m['gvkey'],
+            m['fiscal_year'],
+            m['fiscal_quarter'],
+            m['datadate'],
+        ))
+
+        self.financial_mapper.reset_ytd_tracker()
+
+        for mapped in mapped_records:
+            self.financial_mapper.insert_financial_data(mapped)
+            count += 1
+
         logger.info(f"Populated financial tables with {count} records (skipped {skipped})")
     
     def populate_all_tables(self, extracted_data: List[Dict[str, Any]]):

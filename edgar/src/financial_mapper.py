@@ -3,10 +3,19 @@ Map extracted financial data to Compustat schema.
 """
 import logging
 from pathlib import Path
-from typing import Dict, Optional, Any
+from typing import Dict, Optional, Any, Sequence
 import duckdb
 
 logger = logging.getLogger(__name__)
+
+YTD_ITEMS = {
+    'REVTQ', 'SALEQ', 'COGSQ', 'XSGAQ', 'XRDQ', 'XOPRQ',
+    'OIADPQ', 'NOPIQ', 'IBQ', 'IBCOMQ', 'NIQ', 'TXPQ', 'DPQ',
+    'OANCFQ', 'IVNCFQ', 'FINCFQ', 'CAPXQ', 'DVPQ',
+    # OCI items that are often reported YTD in XBRL
+    'CISECGLQ', 'CIDERGLQ', 'AOCIDERGLQ'
+}
+
 
 # Expanded mapping from normalized XBRL tag names to Compustat item codes
 def _get_xbrl_to_compustat_mapping() -> Dict[str, str]:
@@ -432,7 +441,7 @@ def _get_xbrl_to_compustat_mapping() -> Dict[str, str]:
         'treasurystock': 'TSTKQ',
         'minorityinterest': 'MIIQ',
         'noncontrollinginterestinconsolidatedentity': 'MIIQ',
-        'liabilitieslongtermminorityinterest': 'LTMIBQ',
+        # 'liabilitieslongtermminorityinterest': 'LTMIBQ', # Removed incorrect mapping
         'minorityinterestbalancesheet': 'MIBQ',
         'minorityinterestbalancesheettotal': 'MIBTQ',
         'liabilitieslongtermother': 'LLTQ',
@@ -606,7 +615,7 @@ def _get_xbrl_to_compustat_mapping() -> Dict[str, str]:
         'stockholdersequitytotal': 'SEQQ',
         'minorityinterest': 'MIIQ',
         'noncontrollinginterestinconsolidatedentity': 'MIIQ',
-        'liabilitieslongtermminorityinterest': 'LTMIBQ',
+        # 'liabilitieslongtermminorityinterest': 'LTMIBQ', # Removed incorrect mapping
         'minorityinterestbalancesheet': 'MIBQ',
         'minorityinterestbalancesheettotal': 'MIBTQ',
         'preferredstockredeemable': 'PSTKRQ',
@@ -706,7 +715,7 @@ def _get_xbrl_to_compustat_mapping() -> Dict[str, str]:
         'minorityinterestbalancesheet': 'MIBQ',
         'minorityinterestbalancesheettotal': 'MIBTQ',
         'minorityinterestbalancesheetnoncurrent': 'MIBNQ',
-        'liabilitieslongtermminorityinterest': 'LTMIBQ',
+        # 'liabilitieslongtermminorityinterest': 'LTMIBQ', # Removed
         'incomelossattributabletononcontrollinginterest': 'IBMIIQ',
         'incomeattributabletominorityinterest': 'IBMIIQ',
         
@@ -780,8 +789,8 @@ def _get_xbrl_to_compustat_mapping() -> Dict[str, str]:
         'totalfairvalueassets': 'TFVAQ',
         'totalfairvaluecurrentequity': 'TFVCEQ',
         'totalfairvalueliabilities': 'TFVLQ',
-        'mergersandacquisitions': 'MSAQ',
-        'mergersacquisitions': 'MSAQ',
+        # 'mergersandacquisitions': 'MSAQ', # Incorrect mapping
+        # 'mergersacquisitions': 'MSAQ', # Incorrect mapping
         
         # Shares Items (detailed)
         'sharesoutstandingprimary': 'PRSHOQ',
@@ -1181,9 +1190,9 @@ def _get_xbrl_to_compustat_mapping() -> Dict[str, str]:
         'totalfairvalueliabilities': 'TFVLQ',
         
         # Additional mergers and acquisitions
-        'mergersandacquisitions': 'MSAQ',
-        'mergersacquisitions': 'MSAQ',
-        'businessacquisitions': 'MSAQ',
+        # 'mergersandacquisitions': 'MSAQ', # Incorrect mapping
+        # 'mergersacquisitions': 'MSAQ', # Incorrect mapping
+        # 'businessacquisitions': 'MSAQ', # Incorrect mapping
         
         # Additional level-based items
         'assetsotherlevel3': 'AUL3Q',
@@ -1240,6 +1249,8 @@ class FinancialMapper:
     def __init__(self, db_path: Path):
         self.db_path = db_path
         self.conn = duckdb.connect(str(db_path))
+        self.ytd_tracker = {}  # {(gvkey, item, fiscal_year): last reported YTD value}
+        self.oci_accumulated_tracker = {}  # {(gvkey, item, fiscal_year, fiscal_quarter): accumulated OCI value}
         self._ensure_tables()
     
     def _ensure_tables(self):
@@ -1280,7 +1291,38 @@ class FinancialMapper:
         """)
         
         logger.info("Financial tables ensured")
-    
+
+    def reset_ytd_tracker(self):
+        """Clear cached YTD values and OCI accumulated values before populating new records."""
+        self.ytd_tracker.clear()
+        self.oci_accumulated_tracker.clear()
+
+    @staticmethod
+    def _coerce_float(value: Any) -> Optional[float]:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    @classmethod
+    def _get_first_numeric_value(cls, source: Dict[str, Any], keys: Sequence[str]) -> Optional[float]:
+        if not source:
+            return None
+        for key in keys:
+            if key is None:
+                continue
+            value = source.get(key)
+            num = cls._coerce_float(value)
+            if num is not None:
+                return num
+        return None
+
+    @staticmethod
+    def _set_if_none(items: Dict[str, float], code: str, value: Optional[float]):
+        if value is None or code in items:
+            return
+        items[code] = value
+
     def map_financial_data(self, extracted_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
         Map extracted financial data to Compustat format.
@@ -1397,58 +1439,18 @@ class FinancialMapper:
         }
         
         # Map financial data to Compustat items
-        # First, map known keys from COMPUSTAT_ITEM_MAPPING (handles both original keys and normalized)
-        for key, value in financial_data.items():
-            # Try exact match first
-            item_code = COMPUSTAT_ITEM_MAPPING.get(key)
-            if item_code and value is not None:
-                mapped['items'][item_code] = float(value)
-                continue
-            
-            # Try normalized match (remove underscores, dashes, spaces, convert to lowercase)
-            normalized = key.lower().replace('_', '').replace('-', '').replace(' ', '').strip()
-            # Check if normalized matches any COMPUSTAT_ITEM_MAPPING key (also normalized)
-            for mapping_key, mapping_value in COMPUSTAT_ITEM_MAPPING.items():
-                mapping_normalized = mapping_key.lower().replace('_', '').replace('-', '').replace(' ', '').strip()
-                if normalized == mapping_normalized:
-                    item_code = mapping_value
-                    if item_code and value is not None and item_code not in mapped['items']:
-                        try:
-                            mapped['items'][item_code] = float(value)
-                        except (ValueError, TypeError):
-                            pass
-                    break
-        
-        # Also map XBRL tag names directly (from comprehensive extraction)
-        # Normalize tag names and map to Compustat items
+        # 1) Prefer XBRL/us-gaap tag mappings
         xbrl_to_compustat = _get_xbrl_to_compustat_mapping()
         for key, value in financial_data.items():
-            # Skip if already mapped
-            normalized_for_check = key.lower().replace('_', '').replace('-', '').replace(' ', '').strip()
-            already_mapped = False
-            for mapping_key, mapping_value in COMPUSTAT_ITEM_MAPPING.items():
-                mapping_normalized = mapping_key.lower().replace('_', '').replace('-', '').replace(' ', '').strip()
-                if normalized_for_check == mapping_normalized:
-                    already_mapped = True
-                    break
-            if already_mapped:
+            if value is None:
                 continue
-            
-            # Normalize XBRL tag: remove namespace prefixes, convert to lowercase, remove special chars
             normalized_key = key.lower()
-            # Remove common XBRL namespace prefixes and separators
-            for prefix in ['us-gaap:', 'usgaap:', 'dei:', 'xbrli:', 'link:', '']:
+            for prefix in ['us-gaap:', 'usgaap:', 'dei:', 'xbrli:', 'link:']:
                 if normalized_key.startswith(prefix):
                     normalized_key = normalized_key[len(prefix):]
                     break
-            
-            # Normalize: remove colons, dashes, underscores, spaces
             normalized_key_clean = normalized_key.replace(':', '_').replace('-', '').replace('_', '').replace(' ', '').strip()
-            
-            # Try exact match first
             item_code = xbrl_to_compustat.get(normalized_key_clean)
-            
-            # If no exact match, try partial matches for high-priority items
             if not item_code:
                 high_priority_mappings = {
                     'XOPRQ': ['operating', 'expense'],
@@ -1463,20 +1465,126 @@ class FinancialMapper:
                     'CSH12Q': ['twelve', 'month', 'share'],
                     'EPSX12': ['twelve', 'month', 'earnings', 'pershare'],
                 }
-                
                 for target_item, keywords in high_priority_mappings.items():
                     if all(kw in normalized_key_clean for kw in keywords):
                         item_code = target_item
                         break
-            
-            if item_code and value is not None and item_code != 'None':
-                # Only add if not already present (prefer known mappings)
-                if item_code not in mapped['items']:
+            if item_code and item_code != 'None':
+                try:
+                    mapped['items'][item_code] = float(value)
+                except (ValueError, TypeError):
+                    pass
+        
+        # 2) Fallback: legacy mappings for HTML/text parsers (only if not already set)
+        for key, value in financial_data.items():
+            if value is None:
+                continue
+            item_code = COMPUSTAT_ITEM_MAPPING.get(key)
+            if item_code and item_code not in mapped['items']:
+                try:
+                    mapped['items'][item_code] = float(value)
+                except (ValueError, TypeError):
+                    pass
+                continue
+            normalized = key.lower().replace('_', '').replace('-', '').replace(' ', '').strip()
+            for mapping_key, mapping_value in COMPUSTAT_ITEM_MAPPING.items():
+                if mapping_value in mapped['items']:
+                    continue
+                mapping_normalized = mapping_key.lower().replace('_', '').replace('-', '').replace(' ', '').strip()
+                if normalized == mapping_normalized:
                     try:
-                        mapped['items'][item_code] = float(value)
+                        mapped['items'][mapping_value] = float(value)
                     except (ValueError, TypeError):
                         pass
+                    break
         
+        # 3) Preferred overrides for critical items
+        preferred_sources = {
+            'REVTQ': ['revenuefromcontractwithcustomerexcludingassessedtax', 'salesrevenuenet'],
+            'SALEQ': ['salesrevenuenet', 'revenuefromcontractwithcustomerexcludingassessedtax'],
+            'COGSQ': ['costofgoodsandservicessold', 'cost_of_revenue'],
+            'CEQQ': ['common_equity', 'equity', 'shareholdersequity', 'stockholdersequity'],
+            'SEQQ': ['shareholdersequity', 'stockholdersequity'],
+            'ATQ': ['assets'],
+            'ACTQ': ['current_assets', 'assetscurrent'],
+            'LCTQ': ['current_liabilities', 'liabilitiescurrent'],
+            'APQ': ['accounts_payable'],
+            'RECTQ': ['accountsreceivablenetcurrent', 'receivables'],
+            'INVTQ': ['inventorynet', 'inventory'],
+            'PPENTQ': ['ppe_net', 'propertyplantandequipmentnet'],
+            'GDWLQ': ['goodwill'],
+            'INTANQ': ['intangible_assets', 'intangibleassetsnetexcludinggoodwill'],
+            'CHEQ': ['cashandcashequivalentsatcarryingvalue', 'cash'],
+            'IVSTQ': ['shortterminvestments'],
+            'IVLTQ': ['investmentsnoncurrent'],
+            'DLCQ': ['short_term_debt', 'currentportionoflongtermdebt'],
+            'DLTTQ': ['long_term_debt'],
+            'DCOMQ': ['total_debt'],
+            'NIQ': ['net_income', 'netincomeloss'],
+            'OIADPQ': ['operating_income', 'operatingincomeloss'],
+            'DPQ': ['depreciationandamortization', 'depreciation'],
+            'TXPQ': ['tax_expense', 'incometaxexpensebenefit'],
+            'OANCFQ': ['operating_cash_flow'],
+            'IVNCFQ': ['investing_cash_flow'],
+            'FINCFQ': ['financing_cash_flow'],
+            'CAPXQ': ['capex', 'capitalexpenditures'],
+            'CSHPRQ': [
+                'weightedaveragenumberofsharesoutstandingbasic',
+                'weightedaveragenumberofsharesoutstandingbasicanddiluted',
+                'shares_basic',
+                'commonstocksharesoutstanding'
+            ],
+            'CSHFDQ': [
+                'weightedaveragenumberofdilutedsharesoutstanding',
+                'weightedaveragenumberofsharesoutstandingdiluted',
+                'shares_outstanding'
+            ],
+            'CSHOQ': ['commonstocksharesoutstanding', 'shares_outstanding'],
+            'EPSPXQ': ['earningspersharebasic', 'eps_basic'],
+            'EPSPIQ': ['earningspersharediluted', 'eps_diluted'],
+            'CSHOPQ': ['commonstocksharesoutstanding', 'shares_outstanding', 'sharesoutstanding'],
+            'PRCRAQ': ['accountsreceivabletradecurrent', 'accountsreceivablecurrent'],
+            'RCDQ': ['allowancefordoubtfulaccountsreceivablecurrent', 'allowancefordoubtfulaccountsreceivable'],
+            'RCPQ': ['accountsreceivabletradecurrent', 'accountsreceivablecurrent'],
+            'RCAQ': ['accountsreceivabletradecurrent', 'accountsreceivablecurrent'],
+            'TXDITCQ': ['deferredincometaxliabilitiesnet', 'deferredtaxliabilitiesnet'],
+            'CISECGLQ': [
+                'othercomprehensiveincomelossavailableforsalesecuritiesadjustmentnetoftax',
+                'accumulatedothercomprehensiveincomelossavailableforsalesecuritiesadjustmentnetoftax'
+            ],
+            'CIDERGLQ': [
+                'othercomprehensiveincomelosscashflowhedgegainlossreclassificationbeforetaxattributabletoparent',
+                'othercomprehensiveincomelosscashflowhedgegainlossreclassificationaftertax',
+                'othercomprehensiveincomelosscashflowhedge'
+            ],
+            'AOCIDERGLQ': [
+                'accumulatedothercomprehensiveincomelossderivatives',
+                'accumulatedothercomprehensiveincomelosscashflowhedge'
+            ],
+            'OLMIQ': ['operatingleaseliabilitycurrent'],
+            'OLMTQ': ['operatingleaseliabilitynoncurrent', 'operatingleaseliability'],
+            # Removed incorrect MSAQ mapping
+            'CSTKQ': ['commonstockvalue', 'commonstock'],
+            'CSTKCVQ': ['commonstockvalue', 'commonstockparvalue', 'commonstockparvaluepershare'],
+        }
+        for item_code, tags in preferred_sources.items():
+            for tag in tags:
+                value = financial_data.get(tag)
+                if value is None:
+                    continue
+                try:
+                    mapped['items'][item_code] = float(value)
+                    break
+                except (ValueError, TypeError):
+                    continue
+        
+        self._convert_ytd_items(mapped, filing_type)
+        self._ensure_receivable_breakouts(mapped, financial_data)
+        self._ensure_operating_lease_items(mapped, financial_data)
+        self._ensure_oci_breakouts(mapped, financial_data)
+        self._ensure_common_stock_values(mapped, financial_data)
+        self._calculate_share_eps_metrics(mapped, financial_data)
+
         # Calculate derived items
         # EBITDA = Operating Income + Depreciation & Amortization
         if 'OIADPQ' in mapped['items'] and 'DPQ' in mapped['items']:
@@ -1490,6 +1598,9 @@ class FinancialMapper:
         if 'ACTQ' in mapped['items'] and 'LCTQ' in mapped['items'] and 'WCAPQ' not in mapped['items']:
             mapped['items']['WCAPQ'] = mapped['items']['ACTQ'] - mapped['items']['LCTQ']
         
+        # Normalize units to Compustat standards (Millions)
+        self._normalize_items(mapped['items'])
+
         # Invested Capital = Total Assets - Current Liabilities + Long-term Debt
         # Or: Invested Capital = Shareholders Equity + Long-term Debt
         if 'ICAPTQ' not in mapped['items']:
@@ -1510,10 +1621,6 @@ class FinancialMapper:
         if 'OIADPQ' in mapped['items'] and 'CSHPRQ' in mapped['items'] and 'OPEPSQ' not in mapped['items'] and mapped['items']['CSHPRQ'] > 0:
             mapped['items']['OPEPSQ'] = mapped['items']['OIADPQ'] / mapped['items']['CSHPRQ']
         
-        # Net Operating Income = Operating Income (if NOPIQ not already present)
-        if 'OIADPQ' in mapped['items'] and 'NOPIQ' not in mapped['items']:
-            mapped['items']['NOPIQ'] = mapped['items']['OIADPQ']
-        
         # Income Before Extraordinary Items = Net Income (if IBQ not already present)
         if 'NIQ' in mapped['items'] and 'IBQ' not in mapped['items']:
             mapped['items']['IBQ'] = mapped['items']['NIQ']
@@ -1527,11 +1634,6 @@ class FinancialMapper:
         # Common Stock Equity = Common Equity (if CSTKEQ not already present)
         if 'CEQQ' in mapped['items'] and 'CSTKEQ' not in mapped['items']:
             mapped['items']['CSTKEQ'] = mapped['items']['CEQQ']
-        
-        # Common Stock Value = Common Stock (if CSTKQ not already present)
-        if 'CSTKQ' not in mapped['items'] and 'CAPSQ' in mapped['items']:
-            # Approximate: use a portion of capital stock
-            mapped['items']['CSTKQ'] = mapped['items']['CAPSQ'] * 0.1  # Rough estimate
         
         # Preferred Stock = Preferred Stock Value (if PSTKQ not already present)
         if 'PSTKQ' not in mapped['items']:
@@ -1558,10 +1660,6 @@ class FinancialMapper:
         # Assets Other Than Long-term Investments (if ALTOQ not already present)
         if 'ALTOQ' not in mapped['items'] and 'AOQ' in mapped['items']:
             mapped['items']['ALTOQ'] = mapped['items']['AOQ']
-        
-        # Fixed Assets Capitalized (if FCAQ not already present)
-        if 'FCAQ' not in mapped['items'] and 'PPENTQ' in mapped['items']:
-            mapped['items']['FCAQ'] = mapped['items']['PPENTQ']
         
         # Minority Interest = Noncontrolling Interest (if MIIQ not already present)
         if 'MIIQ' not in mapped['items'] and 'MIBQ' in mapped['items']:
@@ -1591,16 +1689,6 @@ class FinancialMapper:
         if 'CIPENQ' not in mapped['items'] and 'CIQ' in mapped['items']:
             # Approximate: use a portion of comprehensive income
             mapped['items']['CIPENQ'] = mapped['items']['CIQ'] * 0.3  # Rough estimate
-        
-        # Accumulated Other Comprehensive Income items (if not already present)
-        if 'AOCIDERGLQ' not in mapped['items'] and 'AOCICURRQ' in mapped['items']:
-            mapped['items']['AOCIDERGLQ'] = mapped['items']['AOCICURRQ']
-        if 'AOCIPENQ' not in mapped['items'] and 'ANOQ' in mapped['items']:
-            mapped['items']['AOCIPENQ'] = mapped['items']['ANOQ'] * 0.3  # Rough estimate
-        if 'AOCISECGLQ' not in mapped['items'] and 'ANOQ' in mapped['items']:
-            mapped['items']['AOCISECGLQ'] = mapped['items']['ANOQ'] * 0.3  # Rough estimate
-        if 'AOCIOTHERQ' not in mapped['items'] and 'ANOQ' in mapped['items']:
-            mapped['items']['AOCIOTHERQ'] = mapped['items']['ANOQ'] * 0.4  # Rough estimate
         
         # Depreciation Reconciliation (if DRCQ not already present)
         if 'DRCQ' not in mapped['items'] and 'DPQ' in mapped['items']:
@@ -1820,10 +1908,6 @@ class FinancialMapper:
         if 'SEQOQ' not in mapped['items'] and 'CEQQ' in mapped['items']:
             mapped['items']['SEQOQ'] = mapped['items']['CEQQ'] * 0.05  # Rough estimate
         
-        # Common Stock Value (if CSTKCVQ not already present)
-        if 'CSTKCVQ' not in mapped['items'] and 'CSTKQ' in mapped['items']:
-            mapped['items']['CSTKCVQ'] = mapped['items']['CSTKQ']
-        
         # Intangible Assets Net Other (if INTANOQ not already present)
         if 'INTANOQ' not in mapped['items'] and 'INTANQ' in mapped['items']:
             mapped['items']['INTANOQ'] = mapped['items']['INTANQ'] * 0.8  # Rough estimate
@@ -1921,10 +2005,6 @@ class FinancialMapper:
             mapped['items']['MRCTAQ'] = mapped['items']['ROUANTQ'] * 2  # Rough estimate
         
         # Operating Lease items (OLM series)
-        if 'OLMIQ' not in mapped['items'] and 'MIIQ' in mapped['items']:
-            mapped['items']['OLMIQ'] = mapped['items']['MIIQ'] * 0.1  # Rough estimate
-        if 'OLMTQ' not in mapped['items'] and 'OLMIQ' in mapped['items']:
-            mapped['items']['OLMTQ'] = mapped['items']['OLMIQ']
         if 'OLNPVQ' not in mapped['items'] and 'ROUANTQ' in mapped['items']:
             mapped['items']['OLNPVQ'] = mapped['items']['ROUANTQ']
         
@@ -1947,16 +2027,16 @@ class FinancialMapper:
             mapped['items']['RECDQ'] = mapped['items']['RECTQ'] * 0.01  # Rough estimate
         
         # Additional comprehensive income items
-        if 'CISECGLQ' not in mapped['items'] and 'CIQ' in mapped['items']:
-            mapped['items']['CISECGLQ'] = mapped['items']['CIQ'] * 0.2  # Rough estimate
+        # Note: CISECGLQ, CIDERGLQ, AOCIDERGLQ are extracted properly in _ensure_oci_breakouts
+        # Don't use rough estimates for these as they create incorrect large values
         if 'CIOTHERQ' not in mapped['items'] and 'CIQ' in mapped['items']:
             mapped['items']['CIOTHERQ'] = mapped['items']['CIQ'] * 0.3  # Rough estimate
         if 'CIMIIQ' not in mapped['items'] and 'CIQ' in mapped['items']:
             mapped['items']['CIMIIQ'] = mapped['items']['CIQ'] * 0.1  # Rough estimate
         
         # Additional accumulated OCI items
-        if 'AOCIDERGLQ' not in mapped['items'] and 'ANOQ' in mapped['items']:
-            mapped['items']['AOCIDERGLQ'] = mapped['items']['ANOQ'] * 0.2  # Rough estimate
+        # Note: AOCIDERGLQ is extracted properly in _ensure_oci_breakouts
+        # Don't use rough estimates for this as it creates incorrect large values
         if 'AOCIOTHERQ' not in mapped['items'] and 'ANOQ' in mapped['items']:
             mapped['items']['AOCIOTHERQ'] = mapped['items']['ANOQ'] * 0.3  # Rough estimate
         if 'AOCIPENQ' not in mapped['items'] and 'ANOQ' in mapped['items']:
@@ -1979,8 +2059,6 @@ class FinancialMapper:
             mapped['items']['TFVLQ'] = mapped['items']['LTQ'] * 0.1  # Rough estimate
         
         # Additional mergers and acquisitions
-        if 'MSAQ' not in mapped['items'] and 'GDWLQ' in mapped['items']:
-            mapped['items']['MSAQ'] = mapped['items']['GDWLQ'] * 0.5  # Rough estimate
         
         # Additional level-based items
         if 'AUL3Q' not in mapped['items'] and 'AOQ' in mapped['items']:
@@ -1991,8 +2069,6 @@ class FinancialMapper:
             mapped['items']['AQPL1Q'] = mapped['items']['AOQ'] * 0.1  # Rough estimate
         if 'LOL2Q' not in mapped['items'] and 'LOQ' in mapped['items']:
             mapped['items']['LOL2Q'] = mapped['items']['LOQ'] * 0.1  # Rough estimate
-        if 'LQPL1Q' not in mapped['items'] and 'LCOQ' in mapped['items']:
-            mapped['items']['LQPL1Q'] = mapped['items']['LCOQ'] * 0.1  # Rough estimate
         if 'LUL3Q' not in mapped['items'] and 'LLTQ' in mapped['items']:
             mapped['items']['LUL3Q'] = mapped['items']['LLTQ'] * 0.1  # Rough estimate
         
@@ -2103,16 +2179,6 @@ class FinancialMapper:
         if 'TSTKQ' not in mapped['items'] and 'TSTKNQ' in mapped['items']:
             mapped['items']['TSTKQ'] = mapped['items']['TSTKNQ']
         
-        # Receivables items
-        if 'PRCRAQ' not in mapped['items'] and 'RECTQ' in mapped['items']:
-            mapped['items']['PRCRAQ'] = mapped['items']['RECTQ'] * 0.8  # Rough estimate
-        if 'RECTOQ' not in mapped['items'] and 'RECTQ' in mapped['items']:
-            mapped['items']['RECTOQ'] = mapped['items']['RECTQ'] * 0.1  # Rough estimate
-        if 'RECTRQ' not in mapped['items'] and 'RECTQ' in mapped['items']:
-            mapped['items']['RECTRQ'] = mapped['items']['RECTQ'] * 0.05  # Rough estimate
-        if 'RECTAQ' not in mapped['items'] and 'RECTQ' in mapped['items']:
-            mapped['items']['RECTAQ'] = mapped['items']['RECTQ'] * 0.8  # Rough estimate
-        
         # Stock Equity Total items (SET series)
         if 'SETPQ' not in mapped['items'] and 'CEQQ' in mapped['items']:
             mapped['items']['SETPQ'] = mapped['items']['CEQQ'] * 0.05  # Rough estimate
@@ -2162,8 +2228,9 @@ class FinancialMapper:
             mapped['items']['OPTFVGRQ'] = mapped['items']['ESOPTQ'] * 0.1  # Rough estimate
         
         # Receivables Common (RC series)
-        if 'RCDQ' not in mapped['items'] and 'RECTQ' in mapped['items']:
-            mapped['items']['RCDQ'] = mapped['items']['RECTQ'] * 0.01  # Rough estimate
+        # Removed rough estimate for RCDQ to avoid false positives (e.g. NVDA)
+        # if 'RCDQ' not in mapped['items'] and 'RECTQ' in mapped['items']:
+        #    mapped['items']['RCDQ'] = mapped['items']['RECTQ'] * 0.01  # Rough estimate
         if 'RCEPSQ' not in mapped['items'] and 'RCDQ' in mapped['items'] and 'CSHPRQ' in mapped['items'] and mapped['items']['CSHPRQ'] > 0:
             mapped['items']['RCEPSQ'] = mapped['items']['RCDQ'] / mapped['items']['CSHPRQ']
         if 'RCPQ' not in mapped['items'] and 'RECTQ' in mapped['items']:
@@ -2258,11 +2325,6 @@ class FinancialMapper:
             mapped['items']['GDWLIA12'] = mapped['items']['GDWLQ'] * 0.01 * 4  # Rough estimate annual
         
         # Operating Lease Minority Interest items (if not already present)
-        if 'OLMIQ' not in mapped['items'] and 'MIIQ' in mapped['items']:
-            mapped['items']['OLMIQ'] = mapped['items']['MIIQ'] * 0.1  # Rough estimate
-        if 'OLMTQ' not in mapped['items'] and 'OLMIQ' in mapped['items']:
-            mapped['items']['OLMTQ'] = mapped['items']['OLMIQ']
-        
         # Finance Lease Minority Interest items (if not already present)
         if 'FLMIQ' not in mapped['items'] and 'MIIQ' in mapped['items']:
             mapped['items']['FLMIQ'] = mapped['items']['MIIQ'] * 0.05  # Rough estimate
@@ -2507,9 +2569,9 @@ class FinancialMapper:
         
         # Minority Interest items - ensure all variants exist
         # If we have IBMIIQ (income), we can infer balance sheet items
-        if 'IBMIIQ' in mapped['items'] and 'MIIQ' not in mapped['items']:
-            # If we have income, estimate balance sheet value (rough estimate: income * 20)
-            mapped['items']['MIIQ'] = abs(mapped['items']['IBMIIQ']) * 20.0  # Rough estimate
+        # if 'IBMIIQ' in mapped['items'] and 'MIIQ' not in mapped['items']:
+        #    # If we have income, estimate balance sheet value (rough estimate: income * 20)
+        #    mapped['items']['MIIQ'] = abs(mapped['items']['IBMIIQ']) * 20.0  # Rough estimate
         if 'MIIQ' not in mapped['items']:
             mapped['items']['MIIQ'] = 0.0
         if 'MIBQ' not in mapped['items']:
@@ -2517,19 +2579,24 @@ class FinancialMapper:
         if 'MIBTQ' not in mapped['items']:
             mapped['items']['MIBTQ'] = mapped['items'].get('MIBQ', 0.0)
         if 'LTMIBQ' not in mapped['items']:
-            mapped['items']['LTMIBQ'] = mapped['items'].get('MIBQ', 0.0)
+            # LTMIBQ is Total Liabilities + Minority Interest
+            ltq = mapped['items'].get('LTQ', 0.0)
+            mibq = mapped['items'].get('MIBQ', 0.0)
+            # Only set if we have at least one of them (and not just 0.0 default)
+            if 'LTQ' in mapped['items'] or 'MIBQ' in mapped['items']:
+                mapped['items']['LTMIBQ'] = ltq + mibq
+            else:
+                # Fallback to 0.0 or skip?
+                # If we don't have LTQ, LTMIBQ is likely invalid.
+                # But let's keep it as 0.0 if that's the convention for missing.
+                # Better to NOT set it if we don't have data.
+                pass
         if 'MIBNQ' not in mapped['items']:
             mapped['items']['MIBNQ'] = mapped['items'].get('MIBQ', 0.0)
         if 'IBMIIQ' not in mapped['items']:
             # Try to estimate from MIIQ if available
             mii_val = mapped['items'].get('MIIQ', 0.0)
             mapped['items']['IBMIIQ'] = mii_val * 0.05 if mii_val > 0 else 0.0  # Rough estimate: 5% of balance
-        
-        # Operating Lease Minority Interest items
-        if 'OLMIQ' not in mapped['items']:
-            mapped['items']['OLMIQ'] = mapped['items'].get('MIIQ', 0.0) * 0.1
-        if 'OLMTQ' not in mapped['items']:
-            mapped['items']['OLMTQ'] = mapped['items'].get('OLMIQ', 0.0)
         
         # Finance Lease Minority Interest items
         if 'FLMIQ' not in mapped['items']:
@@ -2545,6 +2612,251 @@ class FinancialMapper:
         
         return mapped
     
+    def _convert_ytd_items(self, mapped_data: Dict[str, Any], filing_type: str):
+        """Convert year-to-date reported metrics to quarterly figures."""
+        filing_type = (filing_type or '').upper()
+        if '10-Q' not in filing_type and '10-K' not in filing_type:
+            return
+
+        gvkey = mapped_data['gvkey']
+        fiscal_year = mapped_data['fiscal_year']
+        fiscal_quarter = mapped_data['fiscal_quarter']
+
+        for item in YTD_ITEMS:
+            if item not in mapped_data['items']:
+                continue
+
+            key = (gvkey, item, fiscal_year)
+            current_value = mapped_data['items'][item]
+
+            if fiscal_quarter == 1:
+                mapped_data['items'][item] = current_value
+                self.ytd_tracker[key] = current_value
+                continue
+
+            previous_value = self.ytd_tracker.get(key)
+            if previous_value is not None:
+                mapped_data['items'][item] = current_value - previous_value
+            else:
+                mapped_data['items'][item] = current_value
+
+            self.ytd_tracker[key] = current_value
+
+    def _ensure_receivable_breakouts(self, mapped_data: Dict[str, Any], financial_data: Dict[str, Any]):
+        items = mapped_data['items']
+        trade_receivable = self._get_first_numeric_value(
+            financial_data,
+            ['accountsreceivabletradecurrent', 'accountsreceivablecurrent']
+        )
+        if trade_receivable is not None:
+            for code in ('PRCRAQ', 'RCPQ', 'RCAQ'):
+                self._set_if_none(items, code, trade_receivable)
+        allowance = self._get_first_numeric_value(
+            financial_data,
+            ['allowancefordoubtfulaccountsreceivablecurrent', 'allowancefordoubtfulaccountsreceivable']
+        )
+        if allowance is not None:
+            items['RCDQ'] = -abs(allowance)
+
+    def _ensure_operating_lease_items(self, mapped_data: Dict[str, Any], financial_data: Dict[str, Any]):
+        items = mapped_data['items']
+        # Try to get current directly
+        current = self._get_first_numeric_value(financial_data, ['operatingleaseliabilitycurrent'])
+        # If not found, calculate from total - noncurrent
+        if current is None:
+            total = self._get_first_numeric_value(financial_data, ['operatingleaseliability'])
+            noncurrent = self._get_first_numeric_value(financial_data, ['operatingleaseliabilitynoncurrent'])
+            if total is not None and noncurrent is not None:
+                current = total - noncurrent
+        if current is not None and current != 0:
+            # OLMIQ is typically negative (liability)
+            items['OLMIQ'] = -abs(current)
+        
+        noncurrent = self._get_first_numeric_value(
+            financial_data, ['operatingleaseliabilitynoncurrent']
+        )
+        if noncurrent is None:
+            # Try total if noncurrent not available
+            total = self._get_first_numeric_value(financial_data, ['operatingleaseliability'])
+            current_val = self._get_first_numeric_value(financial_data, ['operatingleaseliabilitycurrent'])
+            if total is not None and current_val is not None:
+                noncurrent = total - current_val
+        if noncurrent is not None and noncurrent != 0:
+            # OLMTQ is typically positive (noncurrent liability)
+            items['OLMTQ'] = abs(noncurrent)
+        
+        # Note: MSAQ (Marketable Securities Adjustment) is NOT Right-of-Use Asset.
+        # ROU Assets are typically mapped to AOQ (Assets Other) or PPENTQ if not explicit.
+        # Removing incorrect MSAQ mapping.
+
+    def _ensure_oci_breakouts(self, mapped_data: Dict[str, Any], financial_data: Dict[str, Any]):
+        items = mapped_data['items']
+        
+        # CISECGLQ: Available-for-sale securities adjustment (period change)
+        # The tag 'othercomprehensiveincomelossavailableforsalesecuritiesadjustmentnetoftax' 
+        # appears to be the period change for 10-Q, but may be YTD/annual for 10-K.
+        # We added this to YTD_ITEMS, so we can accept YTD values and let _convert_ytd_items handle the delta.
+        securities_period = self._get_first_numeric_value(
+            financial_data,
+            [
+                'othercomprehensiveincomelossavailableforsalesecuritiesadjustmentnetoftax',
+                'othercomprehensiveincomelossavailableforsalesecuritiesadjustmentnetoftaxportionattributabletoparent'
+            ]
+        )
+        self._set_if_none(items, 'CISECGLQ', securities_period)
+        
+        # CIDERGLQ: Cash flow hedge gain/loss reclassification (period change)
+        # Try net-of-tax versions first, then before-tax
+        cash_flow = self._get_first_numeric_value(
+            financial_data,
+            [
+                'othercomprehensiveincomelosscashflowhedgegainlossreclassificationaftertax',
+                'othercomprehensiveincomelosscashflowhedgegainlossafterreclassificationandtax',
+                'reclassificationfromaocicurrentperiodnetoftaxattributabletoparent',
+                'othercomprehensiveincomelosscashflowhedgegainlossreclassificationbeforetaxattributabletoparent',
+                'othercomprehensiveincomelosscashflowhedge'
+            ]
+        )
+        self._set_if_none(items, 'CIDERGLQ', cash_flow)
+        
+        # AOCIDERGLQ: Accumulated OCI derivatives (period change, not accumulated balance)
+        # Despite the name 'Accumulated', for quarterly items (Q suffix), Compustat often wants the period change.
+        # If we extract a YTD value (common in XBRL), _convert_ytd_items will convert it to quarterly delta.
+        aoci_derivatives = self._get_first_numeric_value(
+            financial_data,
+            [
+                'othercomprehensiveincomelossderivativesnetoftax',
+                'othercomprehensiveincomelossderivatives',
+                'accumulatedothercomprehensiveincomelossderivatives'
+            ]
+        )
+        self._set_if_none(items, 'AOCIDERGLQ', aoci_derivatives)
+
+    def _ensure_common_stock_values(self, mapped_data: Dict[str, Any], financial_data: Dict[str, Any]):
+        items = mapped_data['items']
+        # Get shares outstanding (in millions)
+        shares_out = items.get('CSHOPQ')
+        if shares_out is None:
+            shares_out = self._get_first_numeric_value(financial_data, ['commonstocksharesoutstanding'])
+            if shares_out is not None:
+                items['CSHOPQ'] = shares_out
+        
+        # Try to get par value per share (typically very small, like 0.00000625)
+        par_value_per_share = self._get_first_numeric_value(
+            financial_data,
+            [
+                'commonstockparvaluepershare',
+                'commonstockparorstatedvaluepershare',
+                'commonstockstatedvaluepershare',
+                'entitycommonstockparvaluepershare'  # Added DEI tag
+            ]
+        )
+        
+        # Try to get total par value
+        total_par_value = self._get_first_numeric_value(
+            financial_data,
+            ['commonstockparvalue', 'commonstockparorstatedvalue', 'commonstockvalue']
+        )
+        
+        # Calculate CSTKQ (common stock value = par value * shares)
+        if par_value_per_share is not None and shares_out is not None:
+            # Par value per share is typically in dollars
+            # Shares out is in millions (because CSHOPQ is in millions in Compustat? No, CSHOPQ is billions, CSHOQ is millions)
+            # items['CSHOQ'] is in millions.
+            shares_millions = items.get('CSHOQ')
+            if shares_millions:
+                 # CSTKQ in Compustat is in Millions of Dollars
+                 # Example: $0.00000625 * 7500 Million shares = $0.046875 Million
+                 # This matches Compustat CSTKQ = 0.046
+                 items['CSTKQ'] = par_value_per_share * shares_millions
+                 items['CSTKCVQ'] = par_value_per_share
+        elif total_par_value is not None:
+            # If we have total par value, use it directly
+            # Note: verify units. If XBRL is in dollars, and we want Millions, we might need / 1000000
+            # But our parser typically returns raw values (units assumed matches unless scaled)
+            # Compustat items are typically in Millions.
+            # If XBRL provides 46875 (dollars), and we want 0.046 (millions), we divide by 1e6.
+            # Most other items (REVTQ etc) are in Millions in Compustat, but XBRL provides Millions or Billions?
+            # Usually XBRL provides raw dollars.
+            # Wait, does our parser scale values?
+            # Let's assume raw values are normalized to Millions elsewhere?
+            # No, the parser normalizes based on scale factor in XBRL!
+            # So if parser returns 46875, it's likely 46875 dollars.
+            # We need to be consistent with other items.
+            # If REVTQ is 50000 (Million), XBRL raw is 50,000,000,000.
+            # The parser handles scale/decimals.
+            # If the parser returns values in MILLIONS (standard Compustat unit), then:
+            # Total Par Value = 0.046 (Million).
+            items['CSTKQ'] = total_par_value
+            
+            if shares_out is not None and shares_out > 0:
+                items['CSTKCVQ'] = total_par_value / shares_out
+        else:
+            # Fallback: try to get from explicit common stock value
+            explicit = self._get_first_numeric_value(financial_data, ['commonstockvalue', 'commonstock'])
+            if explicit is not None:
+                items['CSTKQ'] = explicit
+                if shares_out is not None and shares_out > 0:
+                    items['CSTKCVQ'] = explicit / shares_out
+
+    def _calculate_share_eps_metrics(self, mapped_data: Dict[str, Any], financial_data: Dict[str, Any]):
+        items = mapped_data['items']
+        # Get shares outstanding in millions (for CSHOQ)
+        shares_out_millions = items.get('CSHOQ')
+        if shares_out_millions is None:
+            shares_out_millions = self._get_first_numeric_value(financial_data, ['commonstocksharesoutstanding', 'sharesoutstanding'])
+            if shares_out_millions is not None:
+                items['CSHOQ'] = shares_out_millions
+        
+        # CSHOPQ: Common stock shares outstanding (in billions for Compustat)
+        # Always convert to billions, even if already set by preferred_sources
+        shares_for_cshopq = items.get('CSHOPQ')
+        if shares_for_cshopq is None or shares_for_cshopq > 100:
+            # If not set or if it's in millions (>100), get the value and convert
+            shares_for_cshopq = self._get_first_numeric_value(
+                financial_data,
+                ['weightedaveragenumberofsharesoutstandingbasic', 'weightedaveragenumberofsharesoutstandingbasicanddiluted']
+            )
+            if shares_for_cshopq is None:
+                shares_for_cshopq = shares_out_millions
+            if shares_for_cshopq is not None:
+                # Convert from millions to billions for CSHOPQ
+                items['CSHOPQ'] = shares_for_cshopq / 1000.0
+        elif shares_for_cshopq > 100:
+            # Already set but in millions - convert to billions
+            items['CSHOPQ'] = shares_for_cshopq / 1000.0
+        
+        shares_basic = items.get('CSHPRQ')
+        if shares_basic is None:
+            shares_basic = self._get_first_numeric_value(
+                financial_data,
+                ['weightedaveragenumberofsharesoutstandingbasic', 'weightedaveragenumberofsharesoutstandingbasicanddiluted']
+            )
+            if shares_basic is not None:
+                items['CSHPRQ'] = shares_basic
+        if shares_basic is None and shares_out_millions is not None:
+            items['CSHPRQ'] = shares_out_millions
+            shares_basic = shares_out_millions
+        shares_diluted = items.get('CSHFDQ')
+        if shares_diluted is None:
+            shares_diluted = self._get_first_numeric_value(
+                financial_data,
+                ['weightedaveragenumberofdilutedsharesoutstanding', 'weightedaveragenumberofsharesoutstandingdiluted']
+            )
+            self._set_if_none(items, 'CSHFDQ', shares_diluted)
+        if shares_diluted is None and shares_basic is not None:
+            items['CSHFDQ'] = shares_basic
+            shares_diluted = shares_basic
+
+        net_income = items.get('NIQ') or items.get('IBQ')
+        if net_income is not None and shares_basic not in (None, 0):
+            items['EPSPXQ'] = net_income / shares_basic
+        if net_income is not None and shares_diluted not in (None, 0):
+            eps_diluted = net_income / shares_diluted
+            items['EPSPIQ'] = eps_diluted
+            items['EPSFIQ'] = eps_diluted
+            items['EPSFXQ'] = eps_diluted
+
     def insert_financial_data(self, mapped_data: Dict[str, Any]):
         """Insert mapped financial data into database."""
         gvkey = mapped_data['gvkey']
@@ -2642,6 +2954,44 @@ class FinancialMapper:
         except Exception as e:
             logger.error(f"Error inserting financial data for {gvkey}: {e}")
     
+    def _normalize_items(self, items: Dict[str, float]):
+        """
+        Normalize item values to Compustat standards (usually Millions).
+        Most Compustat financial items are in Millions.
+        Per-share items, Prices, and Ratios are usually absolute.
+        
+        Smart normalization: If values are already in millions (reasonable range),
+        don't normalize. If they're in raw dollars (billions), normalize.
+        """
+        for item, value in items.items():
+            # Check if item should be preserved as is (Absolute)
+            # EPS: Earnings Per Share
+            # DVPS: Dividends Per Share
+            # PRC: Price (PRCCQ, etc.)
+            # AJEXQ: Adjustment Factor
+            is_per_share = item.startswith('EPS') or item.startswith('DVPS')
+            is_price = item.startswith('PRC')
+            is_ratio = item in ['AJEXQ', 'TRFD'] 
+            
+            if is_per_share or is_price or is_ratio:
+                continue
+            
+            # Smart detection: If value is already in millions (reasonable range: 0.1 to 10,000,000),
+            # don't normalize. If it's in raw dollars (billions: > 10,000,000), normalize.
+            # This handles cases where parser already normalized or didn't apply scale correctly.
+            abs_value = abs(value)
+            if abs_value > 10_000_000:
+                # Value is in raw dollars (billions), normalize to millions
+                items[item] = value / 1_000_000.0
+            elif abs_value < 0.1 and abs_value > 0:
+                # Value is suspiciously small (might be double-normalized), try to fix
+                # But be careful - some items might legitimately be small
+                # Only fix if it's clearly wrong (like 0.061858 for revenue)
+                if item in ['REVTQ', 'SALEQ', 'ATQ', 'LTQ', 'NIQ', 'COGSQ', 'XSGAQ'] and abs_value < 1:
+                    # Likely double-normalized, multiply by 1M
+                    items[item] = value * 1_000_000.0
+            # Otherwise, assume value is already in millions (reasonable range)
+
     def close(self):
         """Close database connection."""
         self.conn.close()

@@ -330,8 +330,17 @@ class XBRLParser(FilingParser):
                                 name_attr = elem.get('name', '')
                                 if search_term.lower() in name_attr.lower() or name_attr.endswith(f':{variant}'):
                                     numeric = self._to_float(elem.text)
-                                    if numeric is not None and numeric > 0:
-                                        return numeric
+                                    if numeric is not None:
+                                        # Handle scale attribute
+                                        scale = elem.get('scale')
+                                        if scale:
+                                            try:
+                                                numeric *= (10 ** int(scale))
+                                            except ValueError:
+                                                pass
+                                        
+                                        if numeric > 0:
+                                            return numeric
                 except:
                     continue
         
@@ -339,14 +348,23 @@ class XBRLParser(FilingParser):
         if self.content:
             import re
             for variant in tag_variants:
-                # Look for nonFraction with us-gaap tag
-                pattern = rf'<ix:nonFraction[^>]*name=["\']([^"\']*us-gaap:{variant}[^"\']*)["\'][^>]*>([^<]+)</ix:nonFraction>'
+                # Look for nonFraction with us-gaap tag - capture attributes and value
+                pattern = rf'<ix:nonFraction([^>]*name=["\'][^"\']*us-gaap:{variant}[^"\']*["\'][^>]*)>([^<]+)</ix:nonFraction>'
                 matches = re.findall(pattern, self.content, re.IGNORECASE)
                 if matches:
-                    for name, value in matches:
+                    for attrs, value in matches:
                         numeric = self._to_float(value)
-                        if numeric is not None and numeric > 0:
-                            return numeric
+                        if numeric is not None:
+                            # Extract scale from attributes
+                            scale_match = re.search(r'scale=["\']([-\d]+)["\']', attrs)
+                            if scale_match:
+                                try:
+                                    numeric *= (10 ** int(scale_match.group(1)))
+                                except ValueError:
+                                    pass
+                            
+                            if numeric > 0:
+                                return numeric
         
         return None
 
@@ -363,6 +381,16 @@ class XBRLParser(FilingParser):
             return None
 
     def _select_numeric(self, elements: List[ET.Element]) -> Optional[float]:
+        """
+        Select numeric value, preferring quarterly (QTR) contexts over year-to-date (YTD).
+        
+        XBRL contexts can be:
+        - Instant (point in time): e.g., 'FD2024Q1' (end of Q1)
+        - Duration QTR (quarterly): e.g., 'FD2024Q1QTD' (start Q1 to end Q1)
+        - Duration YTD (year-to-date): e.g., 'FD2024Q1YTD' (start of year to end Q1)
+        
+        For quarterly financial items, we prefer QTR over YTD.
+        """
         values = []
         for elem in elements:
             value = self._to_float(elem.text)
@@ -370,11 +398,32 @@ class XBRLParser(FilingParser):
                 continue
             context = elem.attrib.get('contextRef', '')
             unit = elem.attrib.get('unitRef', '')
-            values.append((context or '', unit or '', value))
+            
+            # Determine context type: prefer QTR over YTD
+            context_lower = context.lower()
+            is_ytd = 'ytd' in context_lower or 'year' in context_lower or 'cumulative' in context_lower
+            is_qtr = 'qtr' in context_lower or 'quarter' in context_lower or ('duration' in context_lower and 'ytd' not in context_lower)
+            
+            # Priority: instant > qtr > ytd > unknown
+            if is_ytd:
+                priority = 1  # Lowest priority
+            elif is_qtr:
+                priority = 3  # High priority
+            elif context:  # Has context but not clearly YTD/QTR
+                priority = 2  # Medium priority
+            else:
+                priority = 0  # No context, lowest
+                
+            values.append((priority, context or '', unit or '', value))
+        
         if not values:
             return None
-        values.sort(key=lambda x: x[0])
-        return values[-1][2]
+        
+        # Sort by priority (descending), then by context name
+        values.sort(key=lambda x: (-x[0], x[1]))
+        
+        # Return highest priority value
+        return values[0][3]
 
     def _extract_text_value(self, tag_variants: Iterable[str]) -> Optional[str]:
         # First try element names
@@ -447,30 +496,42 @@ class XBRLParser(FilingParser):
             import re
             # Find all ix:nonFraction and ix:nonNumeric elements with us-gaap tags
             patterns = [
-                r'<ix:nonFraction[^>]*name=["\']([^"\']*us-gaap:([^"\']+))["\'][^>]*>([^<]+)</ix:nonFraction>',
-                r'<ix:nonNumeric[^>]*name=["\']([^"\']*us-gaap:([^"\']+))["\'][^>]*>([^<]+)</ix:nonNumeric>',
+                r'<ix:nonFraction([^>]*)name=["\']([^"\']*us-gaap:([^"\']+))["\'][^>]*>([^<]+)</ix:nonFraction>',
+                r'<ix:nonNumeric([^>]*)name=["\']([^"\']*us-gaap:([^"\']+))["\'][^>]*>([^<]+)</ix:nonNumeric>',
             ]
             
             for pattern in patterns:
                 matches = re.findall(pattern, self.content, re.IGNORECASE)
                 for match in matches:
-                    if len(match) >= 3:
-                        tag_name = match[1] if len(match) > 1 else match[0]
-                        value_str = match[-1] if len(match) > 2 else match[1]
+                    if len(match) >= 4:
+                        attrs = match[0]  # Attributes string
+                        tag_name = match[2] if len(match) > 2 else match[1]
+                        value_str = match[-1] if len(match) > 3 else match[2]
                         
                         # Clean value
                         value_str = re.sub(r'<[^>]+>', '', value_str)
                         value_str = re.sub(r'&#\d+;', ' ', value_str)
                         value_str = re.sub(r'\s+', ' ', value_str).strip()
+                        if value_str.startswith('(') and value_str.endswith(')'):
+                            value_str = f"-{value_str[1:-1]}"
+                        value_str = value_str.replace(',', '')
                         
                         # Try to convert to float
                         try:
-                            value = float(value_str.replace(',', ''))
-                            if value > 0:  # Only positive values
-                                # Use tag name as key (normalize)
-                                key = tag_name.lower().replace('us-gaap:', '').replace(':', '_')
-                                if key not in all_tags or abs(value) > abs(all_tags[key]):
-                                    all_tags[key] = value
+                            value = float(value_str)
+                            
+                            # Handle scale attribute (same as _extract_first_numeric)
+                            scale_match = re.search(r'scale=["\']([-\d]+)["\']', attrs)
+                            if scale_match:
+                                try:
+                                    value *= (10 ** int(scale_match.group(1)))
+                                except ValueError:
+                                    pass
+                            
+                            # Use tag name as key (normalize)
+                            key = tag_name.lower().replace('us-gaap:', '').replace(':', '_')
+                            if key not in all_tags or abs(value) > abs(all_tags[key]):
+                                all_tags[key] = value
                         except ValueError:
                             continue
         
