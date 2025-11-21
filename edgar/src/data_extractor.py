@@ -517,6 +517,8 @@ class DataExtractor:
         self.financial_mapper.reset_ytd_tracker()
 
         for mapped in mapped_records:
+            # Apply YTD conversion on sorted records (requires chronological order)
+            self.financial_mapper.process_ytd_conversion(mapped, mapped.get('filing_type', ''))
             self.financial_mapper.insert_financial_data(mapped)
             count += 1
 

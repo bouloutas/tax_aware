@@ -71,9 +71,15 @@ def reprocess_filings(gvkeys):
     data_dir = Path('data/raw')
     all_extracted_data = []
     
-    # Process 2024 filings
-    for year in ['2024']:
-        for quarter in ['Q1', 'Q2', 'Q3', 'Q4']:
+    # Process 2023 Q3-Q4 and 2024 filings to ensure full fiscal year coverage for MSFT (FY ends June)
+    # MSFT FY24 Q1 was filed in Oct 2023 (2023 Q4)
+    years_quarters = [
+        ('2023', ['Q3', 'Q4']),
+        ('2024', ['Q1', 'Q2', 'Q3', 'Q4'])
+    ]
+    
+    for year, quarters in years_quarters:
+        for quarter in quarters:
             quarter_dir = data_dir / year / quarter
             if not quarter_dir.exists():
                 continue

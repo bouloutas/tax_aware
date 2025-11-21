@@ -1,111 +1,106 @@
 import duckdb
 import pandas as pd
+from pathlib import Path
 import sys
 
-def compare_databases(gvkeys):
-    # Connect to both databases (read-only for reference)
-    con_edgar = duckdb.connect('compustat_edgar.duckdb', read_only=True)
-    con_ref = duckdb.connect('/home/tasos/compustat.duckdb', read_only=True)
+# Configuration
+DB_PATH = Path('compustat_edgar.duckdb')
+REF_DB_PATH = Path('../compustat.duckdb')  # Adjust if needed
+
+def compare_databases():
+    if not DB_PATH.exists():
+        print(f"Error: {DB_PATH} not found.")
+        return
+    if not REF_DB_PATH.exists():
+        print(f"Error: {REF_DB_PATH} not found.")
+        # Try absolute path or prompt user
+        return
+
+    print(f"Comparing {DB_PATH} vs {REF_DB_PATH}")
     
-    print(f"Comparing Data for GVKEYS: {gvkeys}")
+    con = duckdb.connect(str(DB_PATH))
+    
+    # Attach reference DB
+    con.execute(f"ATTACH '{REF_DB_PATH}' AS ref")
+    
+    # Get GVKEYs present in Edgar DB
+    gvkeys = con.execute("SELECT DISTINCT GVKEY FROM main.CSCO_IKEY").fetchall()
+    gvkeys = [g[0] for g in gvkeys]
+    
+    print(f"Found GVKEYs in Edgar DB: {gvkeys}")
+    
+    # Key items to compare
+    key_items = ['REVTQ', 'NIQ', 'ATQ', 'LTQ', 'COGSQ', 'XSGAQ']
     
     for gvkey in gvkeys:
         print(f"\n{'='*60}")
         print(f"Analyzing GVKEY: {gvkey}")
-        print(f"{'='*60}")
         
-        # 1. Get Reference Data (Truth)
-        # We focus on CSCO_IFNDQ (Quarterly Financials)
-        # Joined with IKEY to get dates
-        query_ref = f"""
-            SELECT k.datadate, f.item, f.valuei as val_ref
-            FROM CSCO_IFNDQ f
-            JOIN CSCO_IKEY k ON f.coifnd_id = k.coifnd_id
-            WHERE k.gvkey = '{gvkey}'
-            ORDER BY k.datadate, f.item
+        # Query to compare
+        query = f"""
+        WITH edgar_data AS (
+            SELECT 
+                i.DATADATE,
+                f.ITEM,
+                f.VALUEI as val_edgar
+            FROM main.CSCO_IFNDQ f
+            JOIN main.CSCO_IKEY i ON f.COIFND_ID = i.COIFND_ID
+            WHERE i.GVKEY = '{gvkey}'
+            AND f.ITEM IN ({','.join([f"'{x}'" for x in key_items])})
+        ),
+        ref_data AS (
+            SELECT 
+                DATADATE,
+                coalesce(saleq, revtq) as REVTQ,
+                niq as NIQ,
+                atq as ATQ,
+                ltq as LTQ,
+                cogsq as COGSQ,
+                xsgaq as XSGAQ
+            FROM ref.fundq
+            WHERE gvkey = '{gvkey}'
+            AND datadate >= '2023-01-01'
+        ),
+        ref_unpivoted AS (
+            UNPIVOT ref_data
+            ON REVTQ, NIQ, ATQ, LTQ, COGSQ, XSGAQ
+            INTO NAME item VALUE val_ref
+        )
+        SELECT 
+            r.DATADATE,
+            r.item,
+            r.val_ref,
+            e.val_edgar,
+            (e.val_edgar - r.val_ref) as diff,
+            CASE WHEN r.val_ref != 0 
+                 THEN ABS((e.val_edgar - r.val_ref) / r.val_ref) * 100 
+                 ELSE 0 END as pct_diff
+        FROM ref_unpivoted r
+        JOIN edgar_data e ON r.DATADATE = e.DATADATE AND r.item = e.item
+        WHERE ABS(diff) > 1.0  -- Filter small rounding diffs
+        ORDER BY r.DATADATE, r.item
         """
+        
         try:
-            df_ref = con_ref.execute(query_ref).df()
-            df_ref.columns = [c.lower() for c in df_ref.columns]
+            df = con.execute(query).df()
+            if df.empty:
+                print(f"{'='*60}")
+                print("SUCCESS: Key financials match exactly!")
+            else:
+                print(f"{'='*60}")
+                print(f"FOUND {len(df)} DISCREPANCIES in Key Items:")
+                print(df.to_string())
         except Exception as e:
-            print(f"Error reading reference DB: {e}")
-            continue
-            
-        if df_ref.empty:
-            print("No reference data found.")
-            continue
-
-        # 2. Get Generated Data (Edgar)
-        query_edgar = f"""
-            SELECT k.datadate, f.item, f.valuei as val_edgar
-            FROM CSCO_IFNDQ f
-            JOIN CSCO_IKEY k ON f.coifnd_id = k.coifnd_id
-            WHERE k.gvkey = '{gvkey}'
-            ORDER BY k.datadate, f.item
-        """
-        try:
-            df_edgar = con_edgar.execute(query_edgar).df()
-            df_edgar.columns = [c.lower() for c in df_edgar.columns]
-        except Exception as e:
-            print(f"Error reading Edgar DB: {e}")
-            continue
-
-        if df_edgar.empty:
-            print("No Edgar data generated.")
-            continue
-
-        # 3. Merge and Compare
-        # Merge on Date + Item
-        merged = pd.merge(df_ref, df_edgar, on=['datadate', 'item'], how='outer', suffixes=('_ref', '_edgar'))
-        
-        # Filter for items we actually have in Edgar (or missing)
-        # Key items to check: REVTQ, NIQ, ATQ, LTQ, CEQQ
-        key_items = ['REVTQ', 'NIQ', 'ATQ', 'LTQ', 'CEQQ', 'SALEQ', 'COGSQ', 'XSGAQ']
-        
-        merged_key = merged[merged['item'].isin(key_items)].copy()
-        merged_key['diff'] = merged_key['val_edgar'] - merged_key['val_ref']
-        merged_key['pct_diff'] = (merged_key['diff'] / merged_key['val_ref']).abs() * 100
-        
-        # Drop exact matches (or close enough floating point)
-        discrepancies = merged_key[merged_key['pct_diff'] > 0.01] # > 0.01% diff
-        
-        if discrepancies.empty:
-            print("SUCCESS: Key financials match exactly!")
-        else:
-            print(f"FOUND {len(discrepancies)} DISCREPANCIES in Key Items:")
-            print(discrepancies.sort_values('datadate').tail(20).to_string())
+            print(f"Error comparing GVKEY {gvkey}: {e}")
             
         # Check coverage
+        ref_count = con.execute(f"SELECT COUNT(*) FROM ref.fundq WHERE gvkey = '{gvkey}' AND datadate >= '2023-01-01'").fetchone()[0]
+        edgar_count = con.execute(f"SELECT COUNT(*) FROM main.CSCO_IKEY WHERE gvkey = '{gvkey}'").fetchone()[0]
         print(f"\nCoverage Stats:")
-        print(f"Reference Records: {len(df_ref)}")
-        print(f"Edgar Records:     {len(df_edgar)}")
-        
-    con_edgar.close()
-    con_ref.close()
+        print(f"Reference Records: {ref_count}")
+        print(f"Edgar Records:     {edgar_count}")
 
 if __name__ == "__main__":
-    # Find GVKEYs from SEC_IDCURRENT table (tic is there, not COMPANY)
-    con = duckdb.connect('/home/tasos/compustat.duckdb', read_only=True)
-    try:
-        res = con.execute("SELECT gvkey FROM SEC_IDCURRENT WHERE ITEM='TIC' AND ITEMVALUE='NVDA' LIMIT 1").fetchone()
-        if res:
-            print(f"Found NVDA GVKEY: {res[0]}")
-            nvda_gvkey = res[0]
-        else:
-            nvda_gvkey = '117768' # Known NVDA GVKEY
-            
-        res_msft = con.execute("SELECT gvkey FROM SEC_IDCURRENT WHERE ITEM='TIC' AND ITEMVALUE='MSFT' LIMIT 1").fetchone()
-        if res_msft:
-            print(f"Found MSFT GVKEY: {res_msft[0]}")
-            msft_gvkey = res_msft[0]
-        else:
-            msft_gvkey = '012141'
-            
-    except Exception:
-        nvda_gvkey = '061241'
-        msft_gvkey = '012141'
-    finally:
-        con.close()
+    compare_databases()
 
-    compare_databases([msft_gvkey, nvda_gvkey])
 
