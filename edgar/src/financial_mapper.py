@@ -1440,6 +1440,7 @@ class FinancialMapper:
             'currency': currency,
             'coifnd_id': coifnd_id,
             'effdate': filing_date,  # Effective date (filing date)
+            'filing_type': filing_type,  # Store filing type for YTD conversion logic
             'items': {}
         }
         
@@ -2684,6 +2685,11 @@ class FinancialMapper:
         gvkey = mapped_data['gvkey']
         fiscal_year = mapped_data['fiscal_year']
         fiscal_quarter = mapped_data['fiscal_quarter']
+        
+        # Debug: Log all YTD conversions for MSFT
+        if str(gvkey) == '012141':
+            logger.info(f"Processing YTD conversion for MSFT: FY={fiscal_year}, Q={fiscal_quarter}, FilingType={filing_type}, "
+                       f"Items={list(mapped_data['items'].keys())[:5]}...")
 
         for item in YTD_ITEMS:
             if item not in mapped_data['items']:
@@ -2701,23 +2707,69 @@ class FinancialMapper:
             # Retrieve previous YTD value (from Q1, Q2, or Q3)
             previous_ytd = self.ytd_tracker.get(key)
             
+            # Determine filing type characteristics (needed for Q4 10-K logic)
+            is_annual_filing = '10-K' in filing_type or '20-F' in filing_type
+            is_q4 = fiscal_quarter == 4
+            is_10q = '10-Q' in filing_type
+            
+            # For Q4 10-K filings, always try to get YTD from DB to ensure accuracy
+            # The tracker might have incorrect values if Q1-Q3 weren't processed correctly
+            if is_annual_filing and is_q4:
+                try:
+                    db_ytd = self.conn.execute("""
+                        SELECT SUM(f.VALUEI) 
+                        FROM main.CSCO_IFNDQ f
+                        JOIN main.CSCO_IKEY k ON f.COIFND_ID = k.COIFND_ID
+                        WHERE k.GVKEY = ? AND f.ITEM = ? 
+                        AND k.FYEARQ = ? AND k.FQTR < ?
+                    """, [gvkey, item, fiscal_year, fiscal_quarter]).fetchone()[0]
+                    if db_ytd is not None and db_ytd > 0:
+                        previous_ytd = db_ytd
+                        logger.info(f"Q4 10-K: Retrieved YTD Q1-Q3 from DB for {gvkey} {item} FY{fiscal_year}: {previous_ytd}")
+                except Exception as e:
+                    logger.debug(f"Could not query DB for Q4 YTD: {e}")
+            
+            # Debug logging for MSFT NIQ
+            if item == 'NIQ' and str(gvkey) == '012141':
+                logger.info(f"YTD Conversion: GVKEY={gvkey}, Item={item}, FY={fiscal_year}, Q={fiscal_quarter}, "
+                          f"Current={current_value}, PreviousYTD={previous_ytd}, FilingType={filing_type}, Key={key}")
+            
             if previous_ytd is None:
-                # If we missed previous quarters, we can't calculate QTR from YTD.
-                # Assume the current value is QTR (best guess).
-                mapped_data['items'][item] = current_value
-                # Estimate YTD for next time: this QTR + 0 (missing history)
-                # Ideally we should query DB for missing history, but simpler to just store current.
-                self.ytd_tracker[key] = current_value
-                continue
+                # If we missed previous quarters, try to recover from database
+                # This is especially important for Q4 10-K filings
+                try:
+                    db_ytd = self.conn.execute("""
+                        SELECT SUM(f.VALUEI) 
+                        FROM main.CSCO_IFNDQ f
+                        JOIN main.CSCO_IKEY k ON f.COIFND_ID = k.COIFND_ID
+                        WHERE k.GVKEY = ? AND f.ITEM = ? 
+                        AND k.FYEARQ = ? AND k.FQTR < ?
+                    """, [gvkey, item, fiscal_year, fiscal_quarter]).fetchone()[0]
+                    if db_ytd is not None and db_ytd > 0:
+                        previous_ytd = db_ytd
+                        logger.info(f"Retrieved YTD from DB for {gvkey} {item} FY{fiscal_year} Q{fiscal_quarter}: {previous_ytd}")
+                        # Update tracker so future quarters can use it
+                        self.ytd_tracker[key] = previous_ytd
+                except Exception as e:
+                    logger.debug(f"Could not query DB for YTD: {e}")
+                
+                if previous_ytd is None:
+                    # Still no previous YTD
+                    # For Q1, store as YTD. For other quarters, assume current is QTR and store as YTD estimate.
+                    if fiscal_quarter == 1:
+                        mapped_data['items'][item] = current_value
+                        self.ytd_tracker[key] = current_value
+                    else:
+                        # Missing history - assume current is QTR
+                        mapped_data['items'][item] = current_value
+                        self.ytd_tracker[key] = current_value
+                    continue
 
             # Determine if current_value is YTD or QTR
             # Heuristics:
             # 1. 10-K Q4 is almost always Annual (YTD).
-            # 2. If value is significantly larger than previous YTD (and same sign), likely YTD.
+            # 2. For 10-Q Q2/Q3, if value is significantly larger than previous YTD, likely YTD.
             # 3. If value is smaller than previous YTD (positive values), likely QTR.
-            
-            is_annual_filing = '10-K' in filing_type or '20-F' in filing_type
-            is_q4 = fiscal_quarter == 4
             
             # Calculate ratio for heuristic (avoid div by zero)
             ratio = abs(current_value) / abs(previous_ytd) if abs(previous_ytd) > 1e-6 else 0
@@ -2728,11 +2780,20 @@ class FinancialMapper:
             if is_annual_filing and is_q4:
                 # 10-K Q4 is strictly Annual (YTD) for Income Statement items
                 is_input_ytd = True
+            elif is_10q and fiscal_quarter in (2, 3):
+                # For 10-Q Q2/Q3, check if value is YTD by comparing to previous YTD
+                # If value is > 1.1x previous YTD (and same sign), it's likely YTD
+                # If value is < previous YTD (for positive values), it's likely QTR
+                if ratio > 1.1:
+                    is_input_ytd = True
+                elif current_value > 0 and current_value < previous_ytd:
+                    # Value is smaller than previous YTD - definitely QTR
+                    is_input_ytd = False
+                else:
+                    # Ambiguous - default to YTD if ratio > 1.0 (slight growth)
+                    is_input_ytd = ratio > 1.0
             elif ratio > 1.2:
-                # If value is > 1.2x previous YTD, it's likely the new YTD (e.g. Q2 YTD vs Q1 YTD)
-                # Exception: Big growth or big loss? 
-                # For Revenue, this is safe. For Net Income, signs can flip.
-                # But usually QTR Net Income << YTD Net Income.
+                # Fallback: If value is > 1.2x previous YTD, it's likely the new YTD
                 is_input_ytd = True
             
             if is_input_ytd:
