@@ -3,7 +3,7 @@ Database models and connection management using SQLAlchemy.
 
 This module defines all database models for the tax-aware portfolio management system.
 """
-from datetime import datetime
+from datetime import datetime, date
 from decimal import Decimal
 from typing import Optional
 
@@ -234,6 +234,153 @@ class RebalancingTrade(Base):
 
     def __repr__(self) -> str:
         return f"<RebalancingTrade(trade_id={self.trade_id}, type={self.trade_type}, quantity={self.quantity}, status={self.status})>"
+
+
+# Household Management
+class Household(Base):
+    """Household grouping multiple related accounts."""
+    __tablename__ = "households"
+    
+    household_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    household_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    primary_tax_rate_st: Mapped[Decimal] = mapped_column(
+        Numeric(5, 4), nullable=False, default=Decimal("0.37")
+    )
+    primary_tax_rate_lt: Mapped[Decimal] = mapped_column(
+        Numeric(5, 4), nullable=False, default=Decimal("0.20")
+    )
+    annual_tax_budget: Mapped[Optional[Decimal]] = mapped_column(Numeric(15, 2), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
+    
+    # Relationships
+    household_accounts: Mapped[list["HouseholdAccount"]] = relationship(back_populates="household")
+
+    def __repr__(self) -> str:
+        return f"<Household(household_id={self.household_id}, name={self.household_name})>"
+
+
+class HouseholdAccount(Base):
+    """Links accounts to households with roles."""
+    __tablename__ = "household_accounts"
+    
+    household_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("households.household_id"), primary_key=True
+    )
+    account_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("accounts.account_id"), primary_key=True
+    )
+    account_role: Mapped[str] = mapped_column(String(50), nullable=False, default="primary_taxable")
+    
+    # Relationships
+    household: Mapped["Household"] = relationship(back_populates="household_accounts")
+    account: Mapped["Account"] = relationship()
+
+    def __repr__(self) -> str:
+        return f"<HouseholdAccount(household_id={self.household_id}, account_id={self.account_id}, role={self.account_role})>"
+
+
+# Transition Management
+class TransitionPlan(Base):
+    """Multi-year transition plans for concentrated portfolios."""
+    __tablename__ = "transition_plans"
+    
+    plan_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    account_id: Mapped[int] = mapped_column(Integer, ForeignKey("accounts.account_id"), nullable=False)
+    target_benchmark_id: Mapped[int] = mapped_column(Integer, ForeignKey("benchmarks.benchmark_id"), nullable=False)
+    transition_years: Mapped[int] = mapped_column(Integer, nullable=False)
+    annual_tax_budget: Mapped[Decimal] = mapped_column(Numeric(15, 2), nullable=False)
+    start_date: Mapped[date] = mapped_column(Date, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="active")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
+    
+    # Relationships
+    account: Mapped["Account"] = relationship()
+    benchmark: Mapped["Benchmark"] = relationship()
+    targets: Mapped[list["TransitionTarget"]] = relationship(back_populates="plan")
+
+    def __repr__(self) -> str:
+        return f"<TransitionPlan(plan_id={self.plan_id}, account_id={self.account_id}, years={self.transition_years}, status={self.status})>"
+
+
+class TransitionTarget(Base):
+    """Annual targets for transition plans."""
+    __tablename__ = "transition_targets"
+    
+    plan_id: Mapped[int] = mapped_column(Integer, ForeignKey("transition_plans.plan_id"), primary_key=True)
+    year_number: Mapped[int] = mapped_column(Integer, primary_key=True)
+    target_tracking_error: Mapped[Decimal] = mapped_column(Numeric(8, 6), nullable=False)
+    max_turnover: Mapped[Decimal] = mapped_column(Numeric(5, 4), nullable=False)
+    realized_tax: Mapped[Optional[Decimal]] = mapped_column(Numeric(15, 2), nullable=True)
+    
+    # Relationships
+    plan: Mapped["TransitionPlan"] = relationship(back_populates="targets")
+
+    def __repr__(self) -> str:
+        return f"<TransitionTarget(plan_id={self.plan_id}, year={self.year_number}, TE={self.target_tracking_error})>"
+
+
+class EmbeddedGain(Base):
+    """Tracks embedded gains per tax lot over time."""
+    __tablename__ = "embedded_gains"
+    
+    tax_lot_id: Mapped[int] = mapped_column(Integer, ForeignKey("tax_lots.tax_lot_id"), primary_key=True)
+    as_of_date: Mapped[date] = mapped_column(Date, primary_key=True, nullable=False)
+    embedded_gain: Mapped[Decimal] = mapped_column(Numeric(15, 2), nullable=False)
+    holding_period_days: Mapped[int] = mapped_column(Integer, nullable=False)
+    is_long_term: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    deferral_value: Mapped[Decimal] = mapped_column(Numeric(15, 2), nullable=False)
+    
+    # Relationships
+    tax_lot: Mapped["TaxLot"] = relationship()
+
+    def __repr__(self) -> str:
+        return f"<EmbeddedGain(lot_id={self.tax_lot_id}, date={self.as_of_date}, gain={self.embedded_gain})>"
+
+
+# Customization
+class CustomBenchmarkDefinition(Base):
+    """Custom benchmark definitions with factor tilts and constraints."""
+    __tablename__ = "custom_benchmarks"
+    
+    custom_benchmark_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    base_benchmark_id: Mapped[int] = mapped_column(Integer, ForeignKey("benchmarks.benchmark_id"), nullable=False)
+    account_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("accounts.account_id"), nullable=True)
+    factor_tilts: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON: {"value": 0.2, "momentum": 0.1}
+    sector_tilts: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON: {"Technology": 0.05}
+    excluded_securities: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON: [1, 2, 3]
+    esg_constraints: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON: ESG config
+    min_weight: Mapped[Decimal] = mapped_column(Numeric(8, 6), nullable=False, default=Decimal("0.0001"))
+    max_weight: Mapped[Decimal] = mapped_column(Numeric(8, 6), nullable=False, default=Decimal("0.10"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
+    
+    # Relationships
+    base_benchmark: Mapped["Benchmark"] = relationship()
+    account: Mapped[Optional["Account"]] = relationship()
+
+    def __repr__(self) -> str:
+        return f"<CustomBenchmarkDefinition(id={self.custom_benchmark_id}, name={self.name})>"
+
+
+class ESGScore(Base):
+    """ESG scores and metrics per security."""
+    __tablename__ = "esg_scores"
+    
+    security_id: Mapped[int] = mapped_column(Integer, ForeignKey("securities.security_id"), primary_key=True)
+    as_of_date: Mapped[date] = mapped_column(Date, primary_key=True, nullable=False)
+    esg_score: Mapped[Decimal] = mapped_column(Numeric(5, 2), nullable=True)  # 0-100 scale
+    environmental_score: Mapped[Optional[Decimal]] = mapped_column(Numeric(5, 2), nullable=True)
+    social_score: Mapped[Optional[Decimal]] = mapped_column(Numeric(5, 2), nullable=True)
+    governance_score: Mapped[Optional[Decimal]] = mapped_column(Numeric(5, 2), nullable=True)
+    carbon_intensity: Mapped[Optional[Decimal]] = mapped_column(Numeric(15, 2), nullable=True)  # Tons CO2/$ million
+    controversies: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON list
+    esg_provider: Mapped[str] = mapped_column(String(50), nullable=False, default="unknown")
+    
+    # Relationships
+    security: Mapped["Security"] = relationship()
+
+    def __repr__(self) -> str:
+        return f"<ESGScore(security_id={self.security_id}, date={self.as_of_date}, score={self.esg_score})>"
 
 
 # Database Connection Management

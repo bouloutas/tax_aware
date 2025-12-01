@@ -13,8 +13,12 @@ from .config import (
     CURRENCY_BETA_LOOKBACK_MONTHS,
     CURRENCY_BETA_MIN_OBS,
     IMPUTATION_WARNING_THRESHOLD,
+    ORTHOGONALIZE_FACTORS,
 )
 from .style_factors import FactorCalculator
+from .logging_config import get_logger
+
+logger = get_logger(__name__)
 
 DEFAULT_FACTORS: Sequence[str] = (
     "size",
@@ -69,7 +73,35 @@ def compute_style_exposures(
     if "flags" not in exposures.columns:
         exposures["flags"] = ""
     exposures["flags"] = exposures["flags"].fillna("")
+    
+    # Apply industry median imputation
     exposures = apply_industry_imputation(exposures, as_of)
+    
+    # Store raw exposures before orthogonalization
+    exposures["exposure_raw"] = exposures["exposure"].copy()
+    
+    # Phase 2: Apply orthogonalization if enabled
+    if ORTHOGONALIZE_FACTORS:
+        logger.info(f"Applying factor orthogonalization for {as_of}", 
+                   extra={"as_of": str(as_of), "orthogonalize": True})
+        
+        from .orthogonalization import (
+            center_and_scale,
+            orthogonalize_style_factors,
+            apply_cross_sectional_constraints
+        )
+        
+        # Step 1: Center and scale all factors
+        exposures = center_and_scale(exposures)
+        
+        # Step 2: Orthogonalize style factors against size
+        exposures = orthogonalize_style_factors(exposures, base_factor='size')
+        
+        # Step 3: Re-apply cross-sectional constraints
+        exposures = apply_cross_sectional_constraints(exposures)
+        
+        logger.info(f"Orthogonalization complete", extra={"n_factors": len(exposures['factor'].unique())})
+    
     exposures["month_end_date"] = pd.Timestamp(as_of).date()
     exposures["computed_at"] = pd.Timestamp.utcnow()
     exposures["flags"] = exposures["flags"].fillna("")

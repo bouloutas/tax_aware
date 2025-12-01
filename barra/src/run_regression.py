@@ -21,6 +21,12 @@ def main() -> None:
         result = engine.regress(as_of)
         engine.persist(result)
         print(f"Stored factor returns for {as_of}")
+        
+        # Phase 2: Compute and persist smoothed specific risk
+        smoothed = engine.compute_smoothed_specific_risk(as_of)
+        if not smoothed.empty:
+            engine.persist_smoothed_specific_risk(as_of, smoothed)
+            print(f"Stored smoothed specific risk for {as_of}")
     finally:
         engine.close()
 

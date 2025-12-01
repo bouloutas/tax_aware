@@ -13,8 +13,16 @@ from .config import (
     MULTIASSET_DB,
     CURRENCY_BETA_LOOKBACK_MONTHS,
     CURRENCY_BETA_MIN_OBS,
+    USE_EXTERNAL_MARKET_PROXY,
+    ENFORCE_PIT,
+    MULTI_HORIZON_MOMENTUM,
+    INCLUDE_MOMENTUM_REVERSAL,
+    MULTI_HORIZON_GROWTH,
 )
 from .utils import winsorize_series, zscore
+from .logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -55,9 +63,20 @@ class FactorCalculator:
     def beta(
         self, as_of: dt.date, lookback_months: int = 60, min_obs: int = 36
     ) -> pd.DataFrame:
-        """Market beta from rolling regression vs. cap-weighted index."""
+        """Market beta from rolling regression vs. market index.
+        
+        Uses external SPY if USE_EXTERNAL_MARKET_PROXY=True, otherwise cap-weighted.
+        """
         as_of = _to_date(as_of)
         start_date = _shift_months(as_of, -lookback_months)
+        
+        # Log which market proxy is being used
+        if USE_EXTERNAL_MARKET_PROXY:
+            logger.info(f"Computing beta using external market proxy (SPY)", 
+                       extra={"as_of": str(as_of), "market_proxy": "SPY"})
+        
+        # Note: analytics.market_index_returns already blends SPY and internal
+        # The 'source' column indicates which was used for each date
         query = """
         WITH panel AS (
             SELECT
@@ -113,7 +132,20 @@ class FactorCalculator:
         skip_recent: int = 1,
         min_obs: int = 11,
     ) -> pd.DataFrame:
-        """12-2 momentum with skip-month logic."""
+        """12-2 momentum with skip-month logic.
+        
+        If MULTI_HORIZON_MOMENTUM=True, uses enhanced multi-horizon momentum.
+        """
+        # Use enhanced multi-horizon momentum if enabled
+        if MULTI_HORIZON_MOMENTUM:
+            from .enhanced_factors import compute_multi_horizon_momentum
+            return compute_multi_horizon_momentum(
+                self.conn, 
+                as_of,
+                include_reversal=INCLUDE_MOMENTUM_REVERSAL
+            )
+        
+        # Baseline 12-2 momentum
         as_of = _to_date(as_of)
         end_date = _shift_months(as_of, -skip_recent)
         long_window_start = _shift_months(as_of, -(lookback_months + skip_recent))
@@ -220,9 +252,23 @@ class FactorCalculator:
         return exposures[["gvkey", "factor", "exposure"]]
 
     def book_to_price(self, as_of: dt.date) -> pd.DataFrame:
-        """Book equity divided by market cap."""
+        """Book equity divided by market cap.
+        
+        Enforces PIT if ENFORCE_PIT=True (uses effective_date).
+        """
         as_of = _to_date(as_of)
-        query = """
+        
+        # Build PIT filter condition
+        pit_condition = ""
+        params = [as_of, as_of]  # Default: month_end_date twice
+        
+        if ENFORCE_PIT:
+            pit_condition = "AND effective_date <= ?"
+            params = [as_of, as_of, as_of]  # month_end_date, effective_date, month_end_date
+            logger.info(f"Computing book_to_price with PIT enforcement", 
+                       extra={"as_of": str(as_of), "pit_enabled": True})
+        
+        query = f"""
         WITH ordered AS (
             SELECT
                 *,
@@ -232,6 +278,7 @@ class FactorCalculator:
                 ) AS rn
             FROM analytics.fundamentals_annual
             WHERE month_end_date <= ?
+              {pit_condition}
         ),
         latest_book AS (
             SELECT
@@ -252,7 +299,8 @@ class FactorCalculator:
           AND p.month_end_market_cap IS NOT NULL
           AND p.month_end_market_cap > 0
         """
-        df = self.conn.execute(query, [as_of, as_of]).fetchdf()
+        
+        df = self.conn.execute(query, params).fetchdf()
         if df.empty:
             return pd.DataFrame(columns=["gvkey", "factor", "exposure"])
         df["bp_ratio"] = df["book_equity"] / df["month_end_market_cap"]
@@ -268,7 +316,16 @@ class FactorCalculator:
         return exposures[["gvkey", "factor", "exposure"]]
 
     def growth(self, as_of: dt.date) -> pd.DataFrame:
-        """Year-over-year sales growth."""
+        """Year-over-year sales growth.
+        
+        If MULTI_HORIZON_GROWTH=True, uses enhanced multi-horizon earnings growth.
+        """
+        # Use enhanced multi-horizon growth if enabled
+        if MULTI_HORIZON_GROWTH:
+            from .enhanced_factors import compute_multi_horizon_growth
+            return compute_multi_horizon_growth(self.conn, as_of)
+        
+        # Baseline 1-year sales growth
         as_of = _to_date(as_of)
         query = """
         WITH dedup AS (

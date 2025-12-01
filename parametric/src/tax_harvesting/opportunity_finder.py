@@ -28,6 +28,7 @@ class TaxLossHarvestingOpportunity:
         ticker: str,
         unrealized_loss: Decimal,
         tax_benefit: Decimal,
+        market_value: Decimal,
         replacement_securities: list[dict],
         wash_sale_violation: bool = False,
         score: float = 0.0,
@@ -41,6 +42,7 @@ class TaxLossHarvestingOpportunity:
             ticker: Ticker symbol
             unrealized_loss: Unrealized loss amount
             tax_benefit: Tax benefit from realizing the loss
+            market_value: Current market value of the lot
             replacement_securities: List of replacement security candidates
             wash_sale_violation: Whether this would violate wash sale rules
             score: Opportunity score (higher is better)
@@ -50,6 +52,7 @@ class TaxLossHarvestingOpportunity:
         self.ticker = ticker
         self.unrealized_loss = unrealized_loss
         self.tax_benefit = tax_benefit
+        self.market_value = market_value
         self.replacement_securities = replacement_securities
         self.wash_sale_violation = wash_sale_violation
         self.score = score
@@ -62,6 +65,7 @@ class TaxLossHarvestingOpportunity:
             "ticker": self.ticker,
             "unrealized_loss": float(self.unrealized_loss),
             "tax_benefit": float(self.tax_benefit),
+            "market_value": float(self.market_value),
             "replacement_securities": self.replacement_securities,
             "wash_sale_violation": self.wash_sale_violation,
             "score": self.score,
@@ -127,6 +131,7 @@ class TaxLossHarvestingFinder:
 
             # Calculate unrealized loss
             cost_basis_per_share = tax_lot.purchase_price
+            market_value = current_price * tax_lot.remaining_quantity
             unrealized_loss_per_share = current_price - cost_basis_per_share
             unrealized_loss = unrealized_loss_per_share * tax_lot.remaining_quantity
 
@@ -185,6 +190,7 @@ class TaxLossHarvestingFinder:
                 ticker=ticker,
                 unrealized_loss=unrealized_loss,
                 tax_benefit=tax_benefit,
+                market_value=market_value,
                 replacement_securities=replacement_securities,
                 wash_sale_violation=wash_sale_violation,
                 score=score,

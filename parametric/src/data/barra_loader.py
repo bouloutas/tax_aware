@@ -2,67 +2,81 @@
 Barra risk model data loader.
 
 Loads Barra factor exposures, factor covariance, and specific risk data
-for use in portfolio optimization.
+directly from the Barra analytics DuckDB database.
 """
 from datetime import date
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List
 
+import duckdb
+import numpy as np
 import pandas as pd
 
 from src.core.config import Config
 
 
 class BarraDataLoader:
-    """Loads Barra risk model data."""
+    """Loads Barra risk model data from DuckDB."""
 
-    def __init__(self, barra_data_dir: Optional[Path] = None):
+    def __init__(self, db_path: Optional[str] = None):
         """
         Initialize BarraDataLoader.
 
         Args:
-            barra_data_dir: Directory containing Barra data files (default: data/raw/barra)
+            db_path: Path to Barra analytics DuckDB file (default from Config)
         """
-        if barra_data_dir is None:
-            project_root = Path(__file__).parent.parent.parent
-            barra_data_dir = project_root / "data" / "raw" / "barra"
+        if db_path is None:
+            db_path = Config.BARRA_DB_PATH
+        
+        self.db_path = db_path
+        self._conn = None
 
-        self.barra_data_dir = Path(barra_data_dir)
+    def _get_conn(self) -> duckdb.DuckDBPyConnection:
+        """Get DuckDB connection."""
+        if self._conn is None:
+            # Connect in read-only mode
+            self._conn = duckdb.connect(self.db_path, read_only=True)
+        return self._conn
+
+    def close(self):
+        """Close DuckDB connection."""
+        if self._conn:
+            self._conn.close()
+            self._conn = None
 
     def find_latest_release(self) -> Optional[str]:
         """
-        Find the latest Barra release date.
+        Find the latest date with complete risk model data.
 
         Returns:
             Release date string (YYYY-MM-DD) or None if no releases found
         """
-        if not self.barra_data_dir.exists():
+        try:
+            conn = self._get_conn()
+            # Check for dates that have exposures, covariance, and specific risk
+            # Optimized to operate on distinct dates rather than full table scans
+            query = """
+            WITH style_dates AS (
+                SELECT DISTINCT month_end_date FROM analytics.style_factor_exposures
+            ),
+            cov_dates AS (
+                SELECT DISTINCT month_end_date FROM analytics.factor_covariance
+            ),
+            risk_dates AS (
+                SELECT DISTINCT month_end_date FROM analytics.specific_risk
+            )
+            SELECT MAX(s.month_end_date)
+            FROM style_dates s
+            JOIN cov_dates c ON s.month_end_date = c.month_end_date
+            JOIN risk_dates r ON s.month_end_date = r.month_end_date
+            """
+            result = conn.execute(query).fetchone()
+            if result and result[0]:
+                return result[0].strftime("%Y-%m-%d")
             return None
-
-        # Find all CSV files with dates
-        csv_files = list(self.barra_data_dir.glob("style_exposures_*.csv"))
-        if not csv_files:
+        except Exception as e:
+            print(f"Error finding latest Barra release: {e}")
             return None
-
-        # Extract dates from filenames
-        dates = []
-        for f in csv_files:
-            # Format: style_exposures_YYYY-MM-DD.csv
-            parts = f.stem.split("_")
-            if len(parts) >= 3:
-                date_str = "_".join(parts[2:])  # Handle YYYY-MM-DD
-                try:
-                    date.fromisoformat(date_str)
-                    dates.append(date_str)
-                except ValueError:
-                    continue
-
-        if not dates:
-            return None
-
-        # Return latest date
-        dates.sort(reverse=True)
-        return dates[0]
 
     def load_style_exposures(self, release_date: Optional[str] = None) -> pd.DataFrame:
         """
@@ -72,24 +86,51 @@ class BarraDataLoader:
             release_date: Release date (YYYY-MM-DD). If None, uses latest.
 
         Returns:
-            DataFrame with columns: month_end_date, gvkey, factor, exposure, flags
+            DataFrame with columns: month_end_date, gvkey, factor, exposure
         """
         if release_date is None:
             release_date = self.find_latest_release()
             if release_date is None:
                 raise FileNotFoundError("No Barra release found")
 
-        file_path = self.barra_data_dir / f"style_exposures_{release_date}.csv"
-        if not file_path.exists():
-            raise FileNotFoundError(f"Style exposures file not found: {file_path}")
+        conn = self._get_conn()
+        query = """
+        SELECT month_end_date, gvkey, factor, exposure
+        FROM analytics.style_factor_exposures
+        WHERE month_end_date = ?
+        """
+        df = conn.execute(query, [release_date]).fetchdf()
+        df["month_end_date"] = pd.to_datetime(df["month_end_date"])
+        return df
 
-        df = pd.read_csv(file_path)
+    def load_industry_exposures(self, release_date: Optional[str] = None) -> pd.DataFrame:
+        """
+        Load industry factor exposures.
+
+        Args:
+            release_date: Release date (YYYY-MM-DD). If None, uses latest.
+
+        Returns:
+            DataFrame with columns: month_end_date, gvkey, factor, exposure
+        """
+        if release_date is None:
+            release_date = self.find_latest_release()
+            if release_date is None:
+                raise FileNotFoundError("No Barra release found")
+
+        conn = self._get_conn()
+        query = """
+        SELECT month_end_date, gvkey, factor, exposure
+        FROM analytics.industry_exposures
+        WHERE month_end_date = ?
+        """
+        df = conn.execute(query, [release_date]).fetchdf()
         df["month_end_date"] = pd.to_datetime(df["month_end_date"])
         return df
 
     def load_factor_covariance(self, release_date: Optional[str] = None) -> pd.DataFrame:
         """
-        Load factor covariance matrix.
+        Load factor covariance matrix (long format).
 
         Args:
             release_date: Release date (YYYY-MM-DD). If None, uses latest.
@@ -102,17 +143,20 @@ class BarraDataLoader:
             if release_date is None:
                 raise FileNotFoundError("No Barra release found")
 
-        file_path = self.barra_data_dir / f"factor_covariance_{release_date}.csv"
-        if not file_path.exists():
-            raise FileNotFoundError(f"Factor covariance file not found: {file_path}")
-
-        df = pd.read_csv(file_path)
+        conn = self._get_conn()
+        query = """
+        SELECT month_end_date, factor_i, factor_j, covariance
+        FROM analytics.factor_covariance
+        WHERE month_end_date = ?
+        """
+        df = conn.execute(query, [release_date]).fetchdf()
         df["month_end_date"] = pd.to_datetime(df["month_end_date"])
         return df
 
     def load_specific_risk(self, release_date: Optional[str] = None) -> pd.DataFrame:
         """
         Load specific risk (idiosyncratic risk) data.
+        Prefers smoothed risk if available, falls back to raw.
 
         Args:
             release_date: Release date (YYYY-MM-DD). If None, uses latest.
@@ -125,40 +169,35 @@ class BarraDataLoader:
             if release_date is None:
                 raise FileNotFoundError("No Barra release found")
 
-        file_path = self.barra_data_dir / f"specific_risk_{release_date}.csv"
-        if not file_path.exists():
-            raise FileNotFoundError(f"Specific risk file not found: {file_path}")
-
-        df = pd.read_csv(file_path)
-        df["month_end_date"] = pd.to_datetime(df["month_end_date"])
-        return df
-
-    def load_factor_returns(self, release_date: Optional[str] = None) -> pd.DataFrame:
+        conn = self._get_conn()
+        
+        # Try to get smoothed risk first (Phase 2 enhancement)
+        try:
+            query = """
+            SELECT month_end_date, gvkey, COALESCE(specific_var_shrunk, specific_var_ewma, specific_var_raw) as specific_var
+            FROM analytics.specific_risk_smoothed
+            WHERE month_end_date = ?
+            """
+            df = conn.execute(query, [release_date]).fetchdf()
+            if not df.empty:
+                df["month_end_date"] = pd.to_datetime(df["month_end_date"])
+                return df
+        except Exception:
+            pass
+            
+        # Fallback to basic specific risk
+        query = """
+        SELECT month_end_date, gvkey, specific_var
+        FROM analytics.specific_risk
+        WHERE month_end_date = ?
         """
-        Load factor returns.
-
-        Args:
-            release_date: Release date (YYYY-MM-DD). If None, uses latest.
-
-        Returns:
-            DataFrame with columns: month_end_date, factor, factor_return
-        """
-        if release_date is None:
-            release_date = self.find_latest_release()
-            if release_date is None:
-                raise FileNotFoundError("No Barra release found")
-
-        file_path = self.barra_data_dir / f"factor_returns_{release_date}.csv"
-        if not file_path.exists():
-            raise FileNotFoundError(f"Factor returns file not found: {file_path}")
-
-        df = pd.read_csv(file_path)
+        df = conn.execute(query, [release_date]).fetchdf()
         df["month_end_date"] = pd.to_datetime(df["month_end_date"])
         return df
 
     def get_factor_covariance_matrix(self, release_date: Optional[str] = None) -> pd.DataFrame:
         """
-        Get factor covariance as a square matrix.
+        Get factor covariance as a square matrix with scaling correction.
 
         Args:
             release_date: Release date (YYYY-MM-DD). If None, uses latest.
@@ -182,42 +221,97 @@ class BarraDataLoader:
             cov_matrix.loc[factor_i, factor_j] = cov
             cov_matrix.loc[factor_j, factor_i] = cov  # Symmetric
 
-        # Fill diagonal if missing
-        cov_matrix = cov_matrix.fillna(0)
+        # Fill diagonal if missing (shouldn't happen in valid data)
+        cov_matrix = cov_matrix.fillna(0.0)
+
+        # CRITICAL FIX: Check for scaling issues
+        # The Barra model should have variance values roughly in range [0.0001, 1.0]
+        # (0.01% to 100% annualized variance, or 1% to 100% vol)
+        # If we see variances > 1.0, the data is likely in wrong units
+        
+        diagonal_values = np.diag(cov_matrix.values)
+        max_var = diagonal_values.max()
+        
+        if max_var > 1.0:
+            import warnings
+            warnings.warn(
+                f"Factor covariance has max variance {max_var:.2e} > 1.0. "
+                f"This indicates scaling issues in the Barra model. "
+                f"Applying automatic correction by clipping extreme values."
+            )
+            
+            # Strategy: Cap variances at reasonable maximum (100% = 1.0)
+            # and rescale the covariance matrix proportionally
+            # This preserves correlation structure while fixing scale
+            
+            # Identify problematic factors (variance > 1.0)
+            variances = pd.Series(diagonal_values, index=cov_matrix.index)
+            problematic = variances[variances > 1.0]
+            
+            if len(problematic) > 0:
+                print(f"WARNING: {len(problematic)} factors have variance > 1.0")
+                print(f"  Problematic factors (showing top 5): {problematic.nlargest(5).to_dict()}")
+                
+                # For each problematic factor, rescale its row/column
+                for factor in problematic.index:
+                    current_var = variances[factor]
+                    # Cap at 0.5 (about 70% vol, reasonable for most factors)
+                    target_var = min(current_var, 0.5)
+                    scale_factor = np.sqrt(target_var / current_var)
+                    
+                    # Rescale the factor's row and column
+                    cov_matrix.loc[factor, :] *= scale_factor
+                    cov_matrix.loc[:, factor] *= scale_factor
+        
+        # Final validation
+        diagonal_values_fixed = np.diag(cov_matrix.values)
+        max_var_fixed = diagonal_values_fixed.max()
+        
+        if max_var_fixed > 100:  # Still problematically large
+            # Last resort: global rescaling
+            # Detect if all values are in wrong magnitude (e.g., all 1e10)
+            warnings.warn(
+                f"Extreme scaling detected even after per-factor fix (max_var={max_var_fixed:.2e}). "
+                f"Applying global rescaling."
+            )
+            # Heuristic: if median variance is > 1000, likely in percent^2 or similar
+            median_var = np.median(diagonal_values_fixed[diagonal_values_fixed > 0])
+            if median_var > 1000:
+                # Assume values are in basis points squared or similar
+                # Divide by 10000 to get to decimal
+                cov_matrix = cov_matrix / 10000
+                print(f"  Applied global scaling by 10000x")
 
         return cov_matrix
 
-    def get_security_exposures(self, gvkey: str, release_date: Optional[str] = None) -> pd.DataFrame:
+    def get_all_exposures(self, release_date: Optional[str] = None) -> pd.DataFrame:
         """
-        Get factor exposures for a specific security (by GVKEY).
-
+        Get all factor exposures (style + industry + country) combined.
+        
         Args:
-            gvkey: GVKEY identifier
             release_date: Release date (YYYY-MM-DD). If None, uses latest.
-
+            
         Returns:
-            DataFrame with factor exposures for the security
+            DataFrame with columns: gvkey, factor, exposure
         """
-        exposures_df = self.load_style_exposures(release_date)
-        security_exposures = exposures_df[exposures_df["gvkey"] == gvkey].copy()
-        return security_exposures
-
-    def get_security_specific_risk(self, gvkey: str, release_date: Optional[str] = None) -> float:
-        """
-        Get specific risk for a security (by GVKEY).
-
-        Args:
-            gvkey: GVKEY identifier
-            release_date: Release date (YYYY-MM-DD). If None, uses latest.
-
-        Returns:
-            Specific variance (float)
-        """
-        risk_df = self.load_specific_risk(release_date)
-        security_risk = risk_df[risk_df["gvkey"] == gvkey]
-
-        if security_risk.empty:
-            return 0.0
-
-        return float(security_risk["specific_var"].iloc[0])
-
+        style = self.load_style_exposures(release_date)
+        industry = self.load_industry_exposures(release_date)
+        
+        # Combine
+        combined = pd.concat([
+            style[["gvkey", "factor", "exposure"]],
+            industry[["gvkey", "factor", "exposure"]]
+        ], ignore_index=True)
+        
+        # Add country exposure (USA = 1.0 for all)
+        # We can get the universe from style exposures
+        universe = style["gvkey"].unique()
+        country_df = pd.DataFrame({
+            "gvkey": universe,
+            "factor": "USA",
+            "exposure": 1.0
+        })
+        
+        combined = pd.concat([combined, country_df], ignore_index=True)
+        
+        return combined

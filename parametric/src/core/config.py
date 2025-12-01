@@ -21,7 +21,7 @@ class Config:
     LAMBDA_TRANSACTION: float = float(os.getenv("LAMBDA_TRANSACTION", "0.001"))
     LAMBDA_TAX: float = float(os.getenv("LAMBDA_TAX", "1.0"))
     TRACKING_ERROR_THRESHOLD: float = float(os.getenv("TRACKING_ERROR_THRESHOLD", "0.005"))
-    TURNOVER_LIMIT: float = float(os.getenv("TURNOVER_LIMIT", "0.10"))
+    TURNOVER_LIMIT: float = float(os.getenv("TURNOVER_LIMIT", "0.50"))
     MIN_TAX_LOSS_THRESHOLD: float = float(os.getenv("MIN_TAX_LOSS_THRESHOLD", "1000.0"))
     WASH_SALE_WINDOW_DAYS: int = int(os.getenv("WASH_SALE_WINDOW_DAYS", "30"))
     LONG_TERM_HOLDING_DAYS: int = int(os.getenv("LONG_TERM_HOLDING_DAYS", "365"))
@@ -29,6 +29,12 @@ class Config:
     API_PORT: int = int(os.getenv("API_PORT", "8000"))
     API_RELOAD: bool = os.getenv("API_RELOAD", "false").lower() == "true"
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
+    
+    # Barra Risk Model Integration
+    BARRA_DB_PATH: str = os.getenv(
+        "BARRA_DB_PATH", 
+        "/home/tasos/tax_aware/barra/barra_analytics.duckdb"
+    )
 
     @classmethod
     def get_database_url(cls) -> str:
