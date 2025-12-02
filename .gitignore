@@ -58,3 +58,7 @@ Thumbs.db
 *.temp
 node_modules/
 parametric/.pgdata/
+
+# EDGAR data files (large text files)
+edgar/data/raw/
+edgar/data/**/*.txt
