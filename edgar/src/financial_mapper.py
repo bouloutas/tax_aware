@@ -1386,36 +1386,44 @@ class FinancialMapper:
         # Get fiscal year end month from company metadata
         fiscal_year_end_month = company_metadata.get('fiscal_year_end_month', 12)  # Default to December
         
-        # Calculate fiscal quarter based on fiscal year end month
-        # For example, if FYE is June (month 6), then:
-        # - Q1: Jul-Sep (months 7-9)
-        # - Q2: Oct-Dec (months 10-12)
-        # - Q3: Jan-Mar (months 1-3)
-        # - Q4: Apr-Jun (months 4-6)
+        # Calculate fiscal quarter and fiscal year based on fiscal year end month
+        # 
+        # For example, if FYE is June (month 6), then FY2024 = July 2023 - June 2024:
+        # - Q1: Jul-Sep (months 7-9 of calendar year N-1) → FY = N
+        # - Q2: Oct-Dec (months 10-12 of calendar year N-1) → FY = N  
+        # - Q3: Jan-Mar (months 1-3 of calendar year N) → FY = N
+        # - Q4: Apr-Jun (months 4-6 of calendar year N) → FY = N
+        #
+        # Key insight: Months AFTER the fiscal year end (> FYRC) are in the NEXT fiscal year
+        
         fiscal_year = fiscal_date.year
         fiscal_quarter = 1
         
         if fiscal_year_end_month == 12:  # Calendar year end
             fiscal_quarter = (fiscal_date.month - 1) // 3 + 1
-        elif fiscal_year_end_month == 6:  # June year end (common)
+        elif fiscal_year_end_month == 6:  # June year end (common for tech: MSFT, Oracle, etc.)
+            # For June FYE: Jul-Sep=Q1, Oct-Dec=Q2, Jan-Mar=Q3, Apr-Jun=Q4
             if fiscal_date.month in [7, 8, 9]:
                 fiscal_quarter = 1
+                fiscal_year = fiscal_date.year + 1  # Sep 2023 → FY2024
             elif fiscal_date.month in [10, 11, 12]:
                 fiscal_quarter = 2
+                fiscal_year = fiscal_date.year + 1  # Dec 2023 → FY2024
             elif fiscal_date.month in [1, 2, 3]:
                 fiscal_quarter = 3
-                fiscal_year = fiscal_date.year - 1  # Q3 is in previous calendar year
+                # Jan-Mar 2024 → FY2024 (no adjustment needed)
             else:  # 4, 5, 6
                 fiscal_quarter = 4
-                fiscal_year = fiscal_date.year - 1  # Q4 is in previous calendar year
+                # Apr-Jun 2024 → FY2024 (no adjustment needed)
         else:
             # Generic calculation for other fiscal year ends
-            # Adjust month relative to fiscal year end
+            # Months after FYRC are in the next fiscal year
+            # Adjust month relative to fiscal year end to get quarter
             adjusted_month = (fiscal_date.month - fiscal_year_end_month - 1) % 12 + 1
             fiscal_quarter = (adjusted_month - 1) // 3 + 1
-            # Adjust fiscal year if needed
-            if fiscal_date.month < fiscal_year_end_month:
-                fiscal_year = fiscal_date.year - 1
+            # Adjust fiscal year: if current month > FYRC, we're in next FY
+            if fiscal_date.month > fiscal_year_end_month:
+                fiscal_year = fiscal_date.year + 1
         
         # Calendar quarter and year from fiscal_date (period end date)
         calendar_quarter = (fiscal_date.month - 1) // 3 + 1

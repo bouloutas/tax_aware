@@ -34,7 +34,8 @@ TARGET_COMPANIES = {
 }
 
 FORM_TYPES = ["10-K", "10-K/A", "10-Q", "10-Q/A", "8-K"]
-PILOT_START = date(2023, 1, 1)
+# Extended date range to cover MSFT FY2023 (July 2022 - June 2023) and beyond
+PILOT_START = date(2022, 7, 1)  # Start from MSFT FY2023 Q1
 PILOT_END = date(2024, 12, 31)
 
 

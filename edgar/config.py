@@ -46,3 +46,18 @@ COMPUSTAT_SCHEMA = "main"
 LOG_DIR = PROJECT_ROOT / "logs"
 LOG_LEVEL = "INFO"
 
+# Daily Update Settings
+DAILY_UPDATE_LOOKBACK_DAYS = 1  # How many days to look back for new filings
+DAILY_UPDATE_SCHEDULE = "0 6 * * *"  # 6 AM ET daily
+
+# SEC EDGAR RSS Feeds for daily updates
+SEC_RSS_FEEDS = {
+    '10-K': 'https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=10-K&company=&dateb=&owner=include&count=100&output=atom',
+    '10-Q': 'https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=10-Q&company=&dateb=&owner=include&count=100&output=atom',
+    '10-K/A': 'https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=10-K%2FA&company=&dateb=&owner=include&count=100&output=atom',
+    '10-Q/A': 'https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=10-Q%2FA&company=&dateb=&owner=include&count=100&output=atom',
+}
+
+# Reference database for validation
+COMPUSTAT_REFERENCE_DB = PROJECT_ROOT / "legacy" / "compustat.duckdb"
+

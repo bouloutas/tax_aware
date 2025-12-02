@@ -71,11 +71,15 @@ def reprocess_filings(gvkeys):
     data_dir = Path('data/raw')
     all_extracted_data = []
     
-    # Process 2023 Q3-Q4 and 2024 filings to ensure full fiscal year coverage for MSFT (FY ends June)
-    # MSFT FY24 Q1 was filed in Oct 2023 (2023 Q4)
+    # Process 2022 Q3-Q4 (MSFT FY2023 Q1-Q2), 2023 (FY2023 Q3-Q4, FY2024 Q1-Q2), and 2024 filings
+    # MSFT fiscal year ends in June, so:
+    #   FY2023: Jul 2022 - Jun 2023 (calendar 2022 Q3, Q4, 2023 Q1, Q2, Q3)
+    #   FY2024: Jul 2023 - Jun 2024 (calendar 2023 Q3, Q4, 2024 Q1, Q2, Q3)
+    #   FY2025: Jul 2024 - Jun 2025
     years_quarters = [
-        ('2023', ['Q3', 'Q4']),
-        ('2024', ['Q1', 'Q2', 'Q3', 'Q4'])
+        ('2022', ['Q3', 'Q4']),  # MSFT FY2023 Q1-Q2
+        ('2023', ['Q1', 'Q2', 'Q3', 'Q4']),  # MSFT FY2023 Q3-Q4, FY2024 Q1-Q2
+        ('2024', ['Q1', 'Q2', 'Q3', 'Q4'])   # MSFT FY2024 Q3-Q4, FY2025 Q1
     ]
     
     for year, quarters in years_quarters:
