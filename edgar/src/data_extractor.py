@@ -523,6 +523,11 @@ class DataExtractor:
             count += 1
 
         logger.info(f"Populated financial tables with {count} records (skipped {skipped})")
+        
+        # Optional: Validate against Compustat if available
+        # This can be enabled via config flag
+        if hasattr(self, 'validate_against_compustat') and self.validate_against_compustat:
+            self._validate_against_compustat(mapped_records)
     
     def populate_all_tables(self, extracted_data: List[Dict[str, Any]]):
         """

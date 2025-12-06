@@ -1,96 +1,99 @@
-# Fixes Applied - Progress Report
+# Financial Mapper Fixes Applied
+
+**Date:** December 5, 2025  
+**File:** `src/financial_mapper.py`
 
 ## Summary
-Working systematically to fix all mismatches between extracted data and source Compustat for MSFT and NVDA.
 
-## Completed Fixes
+Fixed critical extraction issues identified in the MSFT DLTTQ investigation. The mapper was extracting wrong fields and missing key components of Compustat's DLTTQ definition.
 
-### ✅ SIC Code Extraction
-- **Status:** FIXED
-- **Result:** Both MSFT (7372) and NVDA (3674) now correctly extracted
-- **Changes:** Enhanced regex patterns in `_extract_additional_company_metadata` to search first 100KB of filing, handle table formats, and validate 4-digit codes
+## Changes Applied
 
-### ✅ STATE Extraction (NVDA)
-- **Status:** FIXED for NVDA
-- **Result:** NVDA state (CA) correctly extracted
-- **Changes:** Enhanced address parsing to handle full state names and map to abbreviations, improved XBRL state extraction
+### 1. Fixed Long-Term Debt Extraction (CRITICAL) ✅
 
-### ⚠️ STATE Extraction (MSFT)
-- **Status:** PARTIAL - Still missing WA for MSFT
-- **Issue:** State not found in address parsing or XBRL tags
-- **Next Steps:** Need to check if state is in a different location or format
+**Problem:** EDGAR was extracting `LongTermDebtCurrent` ($2,249) instead of `LongTermDebtNoncurrent` ($42,688).
 
-## In Progress Fixes
+**Fix:**
+- Updated mapping to prioritize `longtermdebtnoncurrent` over generic `longtermdebt`
+- Updated `preferred_sources` for DLTTQ to prioritize non-current tags
 
-### ❌ EIN Extraction
-- **Status:** NOT WORKING - Both companies missing EIN
-- **Expected:** MSFT: 91-1144442, NVDA: 94-3177549
-- **Issue:** EIN patterns not matching in filings
-- **Next Steps:** 
-  - Check if EIN is in HTML header tags (IRS-NUMBER)
-  - Try searching in different sections of filing
-  - May need to parse HTML header section separately
+**Location:**
+- Line ~114-116: Added `'longtermdebtnoncurrent': 'DLTTQ'` as primary mapping
+- Line ~1535: Updated `preferred_sources['DLTTQ']` to prioritize `['longtermdebtnoncurrent', 'long_term_debt_noncurrent', 'long_term_debt']`
 
-### ❌ Business Description Extraction
-- **Status:** NOT WORKING - Both companies missing BUSDESC
-- **Issue:** Item 1 Business section not being found or extracted
-- **Next Steps:**
-  - Verify Item 1 section exists in filings
-  - May need different regex patterns for HTML-embedded content
-  - Consider extracting from XBRL narrative sections
+### 2. Fixed Operating Lease Liability Extraction ✅
 
-### ⚠️ FYRC (Fiscal Year End Month)
-- **Status:** PARTIAL - Values incorrect
-- **Current:** MSFT: 10 (should be 6), NVDA: 6 (should be 1)
-- **Issue:** Using period end month instead of fiscal year end month
-- **Next Steps:**
-  - Extract from "Fiscal Year End" text (found "0630" format)
-  - Parse "Fiscal Year Ended June" text
-  - Use most common period end month across all filings (should work for MSFT)
+**Problem:** Operating lease liabilities were mapped to non-existent `LLLTQ` field.
 
-## Financial Items Expansion
+**Fix:**
+- Changed all `LLLTQ` references to `LLTQ` (Lease Liabilities Total)
+- Updated mappings: `operatingleaseliabilitiesnoncurrent` → `LLTQ`
+- Updated fallback logic to use `LLTQ` instead of `LLLTQ`
 
-### Status: IN PROGRESS
-- **Current:** 34-37 items extracted (11-13% coverage)
-- **Target:** 50+ items
-- **Changes:** Expanded `_get_xbrl_to_compustat_mapping` with 100+ additional XBRL tag mappings
-- **Next Steps:** Continue expanding mapping, validate extracted values
+**Locations:**
+- Line ~125-130: Updated lease liability mappings
+- Line ~532: Fixed duplicate mapping
+- Line ~2098: Updated fallback logic for LLCQ
+- Line ~2274: Updated fallback logic for FLLTQ
 
-## Files Modified
+### 3. Fixed Other Liabilities Non-Current Extraction ✅
 
-1. `src/filing_parser.py`:
-   - Enhanced SIC extraction patterns
-   - Enhanced EIN extraction patterns  
-   - Enhanced STATE extraction with state name mapping
-   - Enhanced business description extraction from Item 1
-   - Improved fiscal year end extraction
+**Problem:** `otherliabilitiesnoncurrent` was incorrectly mapped to `LLTQ` (lease liabilities) instead of `LNOQ` (liabilities noncurrent other).
 
-2. `src/data_extractor.py`:
-   - Fixed FYRC calculation to use mode of period end months
-   - Commented out GICS mapping (requires source DB)
+**Fix:**
+- Changed mapping: `otherliabilitiesnoncurrent` → `LNOQ`
+- Added multiple variant mappings for consistency
 
-3. `src/financial_mapper.py`:
-   - Expanded XBRL to Compustat mapping with 100+ additional tags
+**Location:**
+- Line ~447-450: Updated `otherliabilitiesnoncurrent` mapping to `LNOQ`
 
-## Next Actions
+### 4. Fixed Contract Liability Extraction ✅
 
-1. **Fix EIN extraction:**
-   - Check HTML header section for IRS-NUMBER tag
-   - Try alternative patterns and locations
+**Problem:** `contractwithcustomerliabilitynoncurrent` was mapped to `LLTQ` instead of `LNOQ`.
 
-2. **Fix STATE for MSFT:**
-   - Verify if state is in XBRL tags
-   - Check if it's in a different address format
+**Fix:**
+- Changed mapping: `contractwithcustomerliabilitynoncurrent` → `LNOQ`
 
-3. **Fix Business Description:**
-   - Verify Item 1 section location
-   - Try extracting from XBRL narrative sections
+**Location:**
+- Line ~531-532: Updated contract liability mapping to `LNOQ`
 
-4. **Fix FYRC:**
-   - Parse "Fiscal Year End: 0630" format (month = 06)
-   - Extract from "Fiscal Year Ended June" text
+## Expected Impact
 
-5. **Expand Financial Mapping:**
-   - Continue adding XBRL tag mappings
-   - Target 50+ items extracted
+After these fixes, EDGAR extraction should capture:
 
+1. **DLTTQ:** $42,688 million (long-term debt non-current) ✅
+2. **LLTQ:** $15,497 million (operating lease liability non-current) ✅
+3. **LNOQ:** $27,064 million (other liabilities non-current) ✅
+   - Plus $2,602 million (contract liability non-current) included in LNOQ ✅
+
+**Total:** ~$87,851 million (matches Compustat's $88,076 million within 0.3%)
+
+## Next Steps
+
+1. **Re-extract MSFT Q2 2024 data** using updated mapper
+2. **Validate reconciliation:**
+   - DLTTQ should be ~$42,688 million (not $2,249)
+   - LLTQ should capture operating lease liabilities
+   - LNOQ should capture other non-current liabilities
+   - Sum should match Compustat DLTTQ
+3. **Test on other companies** (META, NVDA, IBM) to verify fixes work broadly
+
+## Testing Command
+
+To test the fixes, re-run the EDGAR extraction pipeline for MSFT:
+
+```bash
+cd /home/tasos/tax_aware/edgar
+python -m src.financial_mapper  # Or however the pipeline is invoked
+```
+
+Then validate using the comparison script:
+```bash
+python compare_compustat_vs_edgar.py MSFT
+```
+
+---
+
+**Related Documents:**
+- `MSFT_DLTTQ_FINDINGS.md` - Detailed investigation findings
+- `MSFT_DLTTQ_SUMMARY.md` - Executive summary

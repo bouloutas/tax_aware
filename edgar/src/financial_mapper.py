@@ -111,17 +111,22 @@ def _get_xbrl_to_compustat_mapping() -> Dict[str, str]:
         'accruedliabilitiescurrent': 'ACOQ',
         'debtcurrent': 'DLCQ',
         'shorttermborrowings': 'DLCQ',
+        # CRITICAL FIX: Prioritize non-current over current for DLTTQ
+        'longtermdebtnoncurrent': 'DLTTQ',  # Primary - non-current portion
         'longtermdebtandcapitalleaseobligations': 'DLTTQ',
-        'longtermdebt': 'DLTTQ',
         'debtnoncurrent': 'DLTTQ',
+        'longtermdebt': 'DLTTQ',  # Fallback only if non-current not found
         'debtandcapitalleaseshorttermandlongtermcombinedamount': 'DLCQ',
         'liabilitiesother': 'LOQ',
         'liabilitiescurrentother': 'LCOQ',
         'liabilitiesnoncurrentother': 'LLTQ',
         'leaseliabilitiescurrent': 'LLCQ',
         'operatingleaseliabilitiescurrent': 'LLCQ',
-        'leaseliabilitiesnoncurrent': 'LLLTQ',
-        'operatingleaseliabilitiesnoncurrent': 'LLLTQ',
+        # CRITICAL FIX: LLLTQ doesn't exist in Compustat schema, using LLTQ
+        'leaseliabilitiesnoncurrent': 'LLTQ',  # Lease Liabilities Total (non-current)
+        # Operating lease liabilities - use LLTQ for non-current (lease liabilities total)
+        'operatingleaseliabilitiesnoncurrent': 'LLTQ',  # Lease Liabilities Total (non-current portion)
+        'operatingleaseliabilitynoncurrent': 'LLTQ',  # Also map singular form
         'operatingleaseliabilities': 'LLTQ',
         'minorityinterestbalancesheet': 'MIBQ',
         'noncontrollinginterestinconsolidatedentity': 'MIBQ',
@@ -444,9 +449,11 @@ def _get_xbrl_to_compustat_mapping() -> Dict[str, str]:
         # 'liabilitieslongtermminorityinterest': 'LTMIBQ', # Removed incorrect mapping
         'minorityinterestbalancesheet': 'MIBQ',
         'minorityinterestbalancesheettotal': 'MIBTQ',
-        'liabilitieslongtermother': 'LLTQ',
-        'liabilitiesothernoncurrent': 'LLTQ',
-        'otherliabilitiesnoncurrent': 'LLTQ',
+        # CRITICAL FIX: Other liabilities non-current should map to LNOQ, not LLTQ
+        'otherliabilitiesnoncurrent': 'LNOQ',  # Liabilities Noncurrent Other
+        'liabilitiesothernoncurrent': 'LNOQ',
+        'liabilitieslongtermother': 'LNOQ',  # Use LNOQ for non-current other liabilities
+        'liabilitiesnoncurrentother': 'LNOQ',  # Also map this variant
         'investmentslongterm': 'IVLTQ',
         'investmentsnoncurrent': 'IVLTQ',
         'longterminvestments': 'IVLTQ',
@@ -521,8 +528,9 @@ def _get_xbrl_to_compustat_mapping() -> Dict[str, str]:
         'employeerelatedliabilitiescurrent': 'LCOQ',
         'contractwithcustomerliabilitycurrent': 'LCOQ',
         'accruedincometaxesnoncurrent': 'TXDLIQ',
-        'contractwithcustomerliabilitynoncurrent': 'LLTQ',
-        'operatingleaseliabilitynoncurrent': 'LLLTQ',
+        # Contract with customer liability non-current - map to LNOQ (other non-current liabilities)
+        'contractwithcustomerliabilitynoncurrent': 'LNOQ',  # Other Liabilities Noncurrent
+        'operatingleaseliabilitynoncurrent': 'LLTQ',  # Lease Liabilities Total (non-current)
         'derivativeassets': 'AOQ',
         'equitysecuritiesfvninoncurrent': 'IVLTQ',
         'equitysecuritieswithoutreadilydeterminablefairvalueamount': 'IVLTQ',
@@ -1532,7 +1540,8 @@ class FinancialMapper:
             'IVSTQ': ['shortterminvestments'],
             'IVLTQ': ['investmentsnoncurrent'],
             'DLCQ': ['short_term_debt', 'currentportionoflongtermdebt'],
-            'DLTTQ': ['long_term_debt'],
+            # CRITICAL FIX: Prioritize non-current over current for DLTTQ
+            'DLTTQ': ['longtermdebtnoncurrent', 'long_term_debt_noncurrent', 'long_term_debt'],
             'DCOMQ': ['total_debt'],
             'NIQ': ['net_income', 'netincomeloss'],
             'OIADPQ': ['operating_income', 'operatingincomeloss'],
@@ -2086,8 +2095,9 @@ class FinancialMapper:
             mapped['items']['XRENTQ'] = mapped['items']['ROUANTQ'] * 0.1  # Rough estimate
         
         # Operating Lease Liability Current (if LLCQ not already present)
-        if 'LLCQ' not in mapped['items'] and 'LLLTQ' in mapped['items']:
-            mapped['items']['LLCQ'] = mapped['items']['LLLTQ'] * 0.2  # Rough estimate
+        # CRITICAL FIX: Changed LLLTQ to LLTQ (lease liabilities total)
+        if 'LLCQ' not in mapped['items'] and 'LLTQ' in mapped['items']:
+            mapped['items']['LLCQ'] = mapped['items']['LLTQ'] * 0.2  # Rough estimate
         
         # Receivables Depreciation (if RECDQ not already present)
         if 'RECDQ' not in mapped['items'] and 'RECTQ' in mapped['items']:
@@ -2261,8 +2271,9 @@ class FinancialMapper:
         # Finance Lease items (FL series)
         if 'FLCQ' not in mapped['items'] and 'LLCQ' in mapped['items']:
             mapped['items']['FLCQ'] = mapped['items']['LLCQ'] * 0.3  # Rough estimate
-        if 'FLLTQ' not in mapped['items'] and 'LLLTQ' in mapped['items']:
-            mapped['items']['FLLTQ'] = mapped['items']['LLLTQ'] * 0.3  # Rough estimate
+        # CRITICAL FIX: Changed LLLTQ to LLTQ (lease liabilities total)
+        if 'FLLTQ' not in mapped['items'] and 'LLTQ' in mapped['items']:
+            mapped['items']['FLLTQ'] = mapped['items']['LLTQ'] * 0.3  # Rough estimate
         if 'FLMIQ' not in mapped['items'] and 'MIIQ' in mapped['items']:
             mapped['items']['FLMIQ'] = mapped['items']['MIIQ'] * 0.05  # Rough estimate
         if 'FLMTQ' not in mapped['items'] and 'FLMIQ' in mapped['items']:
@@ -2722,18 +2733,55 @@ class FinancialMapper:
             
             # For Q4 10-K filings, always try to get YTD from DB to ensure accuracy
             # The tracker might have incorrect values if Q1-Q3 weren't processed correctly
+            # CRITICAL FIX: Get quarterly values and convert YTD to quarterly if needed
             if is_annual_filing and is_q4:
                 try:
-                    db_ytd = self.conn.execute("""
-                        SELECT SUM(f.VALUEI) 
+                    # Get values per quarter, ordered by quarter
+                    # CRITICAL FIX: Use latest EFFDATE per quarter to get most recent/correct value
+                    quarter_data = self.conn.execute("""
+                        SELECT k.FQTR, f.VALUEI
                         FROM main.CSCO_IFNDQ f
                         JOIN main.CSCO_IKEY k ON f.COIFND_ID = k.COIFND_ID
                         WHERE k.GVKEY = ? AND f.ITEM = ? 
                         AND k.FYEARQ = ? AND k.FQTR < ?
-                    """, [gvkey, item, fiscal_year, fiscal_quarter]).fetchone()[0]
-                    if db_ytd is not None and db_ytd > 0:
-                        previous_ytd = db_ytd
-                        logger.info(f"Q4 10-K: Retrieved YTD Q1-Q3 from DB for {gvkey} {item} FY{fiscal_year}: {previous_ytd}")
+                        AND (k.FQTR, k.PDATEQ) IN (
+                            SELECT FQTR, MAX(PDATEQ)
+                            FROM main.CSCO_IKEY
+                            WHERE GVKEY = ? AND FYEARQ = ? AND FQTR < ?
+                            GROUP BY FQTR
+                        )
+                        ORDER BY k.FQTR
+                    """, [gvkey, item, fiscal_year, fiscal_quarter, gvkey, fiscal_year, fiscal_quarter]).fetchall()
+                    
+                    if quarter_data:
+                        # Convert YTD values to quarterly by detecting if value is cumulative
+                        quarterly_values = []
+                        running_ytd = 0
+                        
+                        for fqtr, value in quarter_data:
+                            if fqtr == 1:
+                                # Q1 is always quarterly (or YTD = quarterly for Q1)
+                                qtr_val = value
+                                quarterly_values.append(qtr_val)
+                                running_ytd = qtr_val
+                            else:
+                                # For Q2, Q3: check if value is YTD or quarterly
+                                # If value is close to or larger than running_ytd, it's likely YTD
+                                # If value is smaller, it's likely quarterly
+                                if value >= running_ytd * 0.9:  # Value is >= 90% of running YTD, likely YTD
+                                    qtr_val = value - running_ytd
+                                    quarterly_values.append(qtr_val)
+                                    running_ytd = value
+                                else:  # Value is smaller, likely quarterly
+                                    qtr_val = value
+                                    quarterly_values.append(qtr_val)
+                                    running_ytd += qtr_val
+                        
+                        # CRITICAL FIX: Sum all quarterly values to get total YTD
+                        db_ytd = sum(quarterly_values)
+                        if db_ytd is not None and db_ytd > 0:
+                            previous_ytd = db_ytd
+                            logger.info(f"Q4 10-K: Retrieved YTD Q1-Q3 from DB for {gvkey} {item} FY{fiscal_year}: {previous_ytd} (Q1={quarterly_values[0] if len(quarterly_values) > 0 else 0}, Q2={quarterly_values[1] if len(quarterly_values) > 1 else 0}, Q3={quarterly_values[2] if len(quarterly_values) > 2 else 0}, sum={db_ytd})")
                 except Exception as e:
                     logger.debug(f"Could not query DB for Q4 YTD: {e}")
             
@@ -2745,19 +2793,45 @@ class FinancialMapper:
             if previous_ytd is None:
                 # If we missed previous quarters, try to recover from database
                 # This is especially important for Q4 10-K filings
+                # CRITICAL FIX: Get quarterly values and convert YTD to quarterly if needed
                 try:
-                    db_ytd = self.conn.execute("""
-                        SELECT SUM(f.VALUEI) 
+                    quarter_data = self.conn.execute("""
+                        SELECT k.FQTR, MAX(f.VALUEI) as value
                         FROM main.CSCO_IFNDQ f
                         JOIN main.CSCO_IKEY k ON f.COIFND_ID = k.COIFND_ID
                         WHERE k.GVKEY = ? AND f.ITEM = ? 
                         AND k.FYEARQ = ? AND k.FQTR < ?
-                    """, [gvkey, item, fiscal_year, fiscal_quarter]).fetchone()[0]
-                    if db_ytd is not None and db_ytd > 0:
-                        previous_ytd = db_ytd
-                        logger.info(f"Retrieved YTD from DB for {gvkey} {item} FY{fiscal_year} Q{fiscal_quarter}: {previous_ytd}")
-                        # Update tracker so future quarters can use it
-                        self.ytd_tracker[key] = previous_ytd
+                        GROUP BY k.FQTR
+                        ORDER BY k.FQTR
+                    """, [gvkey, item, fiscal_year, fiscal_quarter]).fetchall()
+                    
+                    if quarter_data:
+                        # Convert YTD values to quarterly
+                        quarterly_values = []
+                        running_ytd = 0
+                        
+                        for fqtr, value in quarter_data:
+                            if fqtr == 1:
+                                qtr_val = value
+                                quarterly_values.append(qtr_val)
+                                running_ytd = qtr_val
+                            else:
+                                if value >= running_ytd * 0.9:  # Likely YTD
+                                    qtr_val = value - running_ytd
+                                    quarterly_values.append(qtr_val)
+                                    running_ytd = value
+                                else:  # Likely quarterly
+                                    qtr_val = value
+                                    quarterly_values.append(qtr_val)
+                                    running_ytd += qtr_val
+                        
+                        # CRITICAL FIX: Sum all quarterly values to get total YTD
+                        db_ytd = sum(quarterly_values)
+                        if db_ytd is not None and db_ytd > 0:
+                            previous_ytd = db_ytd
+                            logger.info(f"Retrieved YTD from DB for {gvkey} {item} FY{fiscal_year} Q{fiscal_quarter}: {previous_ytd} (from {len(quarterly_values)} quarters)")
+                            # Update tracker so future quarters can use it
+                            self.ytd_tracker[key] = previous_ytd
                 except Exception as e:
                     logger.debug(f"Could not query DB for YTD: {e}")
                 
@@ -2790,16 +2864,30 @@ class FinancialMapper:
                 is_input_ytd = True
             elif is_10q and fiscal_quarter in (2, 3):
                 # For 10-Q Q2/Q3, check if value is YTD by comparing to previous YTD
-                # If value is > 1.1x previous YTD (and same sign), it's likely YTD
-                # If value is < previous YTD (for positive values), it's likely QTR
-                if ratio > 1.1:
+                # CRITICAL FIX: Improve detection logic
+                # If value is significantly larger (>1.5x) than previous YTD, it's definitely YTD
+                # If value is between 1.1x and 1.5x, it could be either - check if it's close to expected YTD
+                # If value is < previous YTD (for positive values), it's definitely QTR
+                if ratio > 1.5:
+                    # Definitely YTD - value is much larger
                     is_input_ytd = True
+                elif ratio > 1.1:
+                    # Could be YTD or large quarterly - use heuristics
+                    # For revenue/income items, if value is close to 2x previous (Q1+Q2), it's likely YTD
+                    # For Q2: if value ≈ 2x Q1, it's YTD. If value ≈ Q1, it's quarterly
+                    # For Q3: if value ≈ 3x Q1, it's YTD. If value ≈ Q1 or Q2, it's quarterly
+                    expected_ytd_ratio = fiscal_quarter  # Q2 should be ~2x Q1, Q3 should be ~3x Q1
+                    if ratio >= expected_ytd_ratio * 0.8:  # Within 80% of expected YTD ratio
+                        is_input_ytd = True
+                    else:
+                        is_input_ytd = False
                 elif current_value > 0 and current_value < previous_ytd:
                     # Value is smaller than previous YTD - definitely QTR
                     is_input_ytd = False
                 else:
-                    # Ambiguous - default to YTD if ratio > 1.0 (slight growth)
-                    is_input_ytd = ratio > 1.0
+                    # Ambiguous - for Q2/Q3, if ratio > 1.0, likely YTD (growth scenario)
+                    # But be conservative: if ratio < 1.2, treat as quarterly
+                    is_input_ytd = ratio >= 1.2
             elif ratio > 1.2:
                 # Fallback: If value is > 1.2x previous YTD, it's likely the new YTD
                 is_input_ytd = True
@@ -2807,12 +2895,38 @@ class FinancialMapper:
             if is_input_ytd:
                 # Input is YTD. Calculate QTR.
                 qtr_value = current_value - previous_ytd
+                
+                # CRITICAL FIX: Validate sign for income statement items
+                # Revenue, income, and expense items should have appropriate signs
+                # For revenue/income items (REVTQ, SALEQ, NIQ, OIADPQ, etc.), quarterly should be positive
+                # For expense items (COGSQ, XSGAQ, etc.), quarterly should typically be positive (expenses are positive in accounting)
+                revenue_income_items = {'REVTQ', 'SALEQ', 'NIQ', 'IBQ', 'IBCOMQ', 'OIADPQ', 'OIBDPQ', 'PIQ', 'NOPIQ'}
+                expense_items = {'COGSQ', 'XSGAQ', 'XRDQ', 'XOPRQ', 'DPQ', 'XINTQ'}
+                
+                # If we get a negative value for revenue/income items, something is wrong
+                if item in revenue_income_items and qtr_value < 0:
+                    logger.warning(f"Negative quarterly value for {item}: {qtr_value} (YTD: {current_value}, Previous YTD: {previous_ytd})")
+                    # If current YTD is less than previous YTD, it might be an error or the values are reversed
+                    # For now, take absolute value as a safety measure, but log the issue
+                    if abs(qtr_value) > abs(current_value) * 0.5:  # If difference is more than 50% of current, likely wrong
+                        logger.error(f"YTD conversion error for {item}: QTR={qtr_value}, Current YTD={current_value}, Previous YTD={previous_ytd}")
+                        # Try to recover: if current is much smaller, maybe previous was wrong
+                        # Or maybe current is actually quarterly, not YTD
+                        if current_value > 0 and current_value < abs(previous_ytd) * 0.5:
+                            # Current might be quarterly, not YTD
+                            logger.info(f"Treating {item} as quarterly instead of YTD (value too small)")
+                            qtr_value = current_value
+                            new_ytd = previous_ytd + qtr_value
+                            mapped_data['items'][item] = qtr_value
+                            self.ytd_tracker[key] = new_ytd
+                            continue
+                
                 mapped_data['items'][item] = qtr_value
                 self.ytd_tracker[key] = current_value
                 
                 if item == 'NIQ' and gvkey == '012141':
                     # Debug log for MSFT NIQ
-                    pass
+                    logger.info(f"MSFT NIQ YTD conversion: QTR={qtr_value}, YTD={current_value}, PrevYTD={previous_ytd}")
             else:
                 # Input is QTR. Calculate new YTD.
                 qtr_value = current_value
@@ -3107,27 +3221,68 @@ class FinancialMapper:
                 ])
             
             # Insert financial items into CSCO_IFNDQ
+            # CRITICAL FIX: Always use UPDATE to prevent duplicates
+            # Check for existing record with same EFFDATE to avoid duplicates from reprocessing
             for item_code, value in items.items():
-                # Check if record exists
-                existing_item = self.conn.execute("""
+                # Check if record exists with same EFFDATE (same filing processed twice)
+                existing_same_effdate = self.conn.execute("""
                     SELECT COUNT(*) FROM main.CSCO_IFNDQ 
-                    WHERE COIFND_ID = ? AND ITEM = ?
-                """, [coifnd_id, item_code]).fetchone()[0]
+                    WHERE COIFND_ID = ? AND ITEM = ? AND EFFDATE = ?
+                """, [coifnd_id, item_code, effdate]).fetchone()[0]
                 
-                if existing_item > 0:
-                    # Update existing
+                if existing_same_effdate > 0:
+                    # Update existing record with same EFFDATE (same filing)
                     self.conn.execute("""
                         UPDATE main.CSCO_IFNDQ 
-                        SET EFFDATE = ?, VALUEI = ?, DATACODE = 1, RST_TYPE = 'RE', THRUDATE = ?
-                        WHERE COIFND_ID = ? AND ITEM = ?
-                    """, [effdate, value, effdate, coifnd_id, item_code])
+                        SET VALUEI = ?, DATACODE = 1, RST_TYPE = 'RE', THRUDATE = ?
+                        WHERE COIFND_ID = ? AND ITEM = ? AND EFFDATE = ?
+                    """, [value, effdate, coifnd_id, item_code, effdate])
                 else:
-                    # Insert new
-                    self.conn.execute("""
-                        INSERT INTO main.CSCO_IFNDQ 
-                        (COIFND_ID, EFFDATE, ITEM, DATACODE, RST_TYPE, THRUDATE, VALUEI)
-                        VALUES (?, ?, ?, 1, 'RE', ?, ?)
-                    """, [coifnd_id, effdate, item_code, effdate, value])
+                    # Check if ANY record exists for this item
+                    existing_item = self.conn.execute("""
+                        SELECT COUNT(*) FROM main.CSCO_IFNDQ 
+                        WHERE COIFND_ID = ? AND ITEM = ?
+                    """, [coifnd_id, item_code]).fetchone()[0]
+                    
+                    if existing_item > 0:
+                        # Update the latest existing record (to maintain single source of truth)
+                        # This handles the case where we're updating with a newer filing
+                        self.conn.execute("""
+                            UPDATE main.CSCO_IFNDQ 
+                            SET EFFDATE = ?, VALUEI = ?, DATACODE = 1, RST_TYPE = 'RE', THRUDATE = ?
+                            WHERE COIFND_ID = ? AND ITEM = ?
+                            AND EFFDATE = (
+                                SELECT MAX(EFFDATE) FROM main.CSCO_IFNDQ
+                                WHERE COIFND_ID = ? AND ITEM = ?
+                            )
+                        """, [effdate, value, effdate, coifnd_id, item_code, coifnd_id, item_code])
+                    else:
+                        # Insert new - only if no existing record
+                        # CRITICAL FIX: Validate value before insertion
+                        # For income statement items, ensure values are reasonable
+                        revenue_income_items = {'REVTQ', 'SALEQ', 'NIQ', 'IBQ', 'IBCOMQ', 'OIADPQ', 'OIBDPQ', 'PIQ', 'NOPIQ'}
+                        expense_items = {'COGSQ', 'XSGAQ', 'XRDQ', 'XOPRQ', 'DPQ', 'XINTQ'}
+                        
+                        # Check if value is reasonable (not obviously wrong)
+                        is_valid = True
+                        if item_code in revenue_income_items:
+                            # Revenue/income should typically be positive for quarterly values
+                            # Allow some negative values (losses) but flag extreme negatives
+                            if value < -1000000:  # Very large negative, likely error
+                                logger.warning(f"Suspicious negative value for {item_code}: {value}, skipping insertion")
+                                is_valid = False
+                        elif item_code in expense_items:
+                            # Expenses should typically be positive
+                            if value < -1000000:  # Very large negative, likely error
+                                logger.warning(f"Suspicious negative value for {item_code}: {value}, skipping insertion")
+                                is_valid = False
+                        
+                        if is_valid:
+                            self.conn.execute("""
+                                INSERT INTO main.CSCO_IFNDQ 
+                                (COIFND_ID, EFFDATE, ITEM, DATACODE, RST_TYPE, THRUDATE, VALUEI)
+                                VALUES (?, ?, ?, 1, 'RE', ?, ?)
+                            """, [coifnd_id, effdate, item_code, effdate, value])
             
         except Exception as e:
             logger.error(f"Error inserting financial data for {gvkey}: {e}")
