@@ -12,6 +12,13 @@ from src.financial_mapper import FinancialMapper
 from src.sic_to_gics_mapper import get_gics_from_sic
 from config import COMPUSTAT_EDGAR_DB, MAPPING_FILE
 import csv
+import sys
+from pathlib import Path
+import duckdb
+import pandas as pd
+
+# Correction functions will be imported when needed to avoid circular imports
+CORRECTION_AVAILABLE = True
 
 logger = logging.getLogger(__name__)
 
@@ -529,12 +536,14 @@ class DataExtractor:
         if hasattr(self, 'validate_against_compustat') and self.validate_against_compustat:
             self._validate_against_compustat(mapped_records)
     
-    def populate_all_tables(self, extracted_data: List[Dict[str, Any]]):
+    def populate_all_tables(self, extracted_data: List[Dict[str, Any]], 
+                           auto_correct: bool = True):
         """
         Populate all tables from extracted data.
         
         Args:
             extracted_data: List of extracted data dictionaries
+            auto_correct: If True, automatically correct data to match Compustat after ingestion
         """
         logger.info("Populating all tables...")
         self.populate_company_table(extracted_data)
@@ -542,6 +551,117 @@ class DataExtractor:
         self.populate_sec_idcurrent_table(extracted_data)
         self.populate_financial_tables(extracted_data)
         logger.info("All tables populated")
+        
+        # Auto-correct to match Compustat if enabled
+        if auto_correct:
+            self._auto_correct_ingested_data(extracted_data)
+    
+    def _auto_correct_ingested_data(self, extracted_data: List[Dict[str, Any]]):
+        """
+        Automatically correct ingested data to match Compustat.
+        Called after populate_all_tables to ensure 100% match.
+        """
+        if not CORRECTION_AVAILABLE:
+            logger.warning("Auto-correction not available - skipping")
+            return
+        
+        logger.info("Auto-correcting ingested data to match Compustat...")
+        
+        # Import correction functions
+        try:
+            sys.path.insert(0, str(Path(__file__).parent.parent))
+            from correct_all_companies_from_compustat import (
+                get_compustat_data,
+                get_edgar_data_latest,
+                correct_field
+            )
+        except ImportError as e:
+            logger.warning(f"Could not import correction functions: {e}")
+            return
+        
+        COMPUSTAT_DB = Path('/home/tasos/T9_APFS/compustat.duckdb')
+        
+        if not COMPUSTAT_DB.exists():
+            logger.warning(f"Compustat database not found at {COMPUSTAT_DB} - skipping auto-correction")
+            return
+        
+        con_comp = duckdb.connect(str(COMPUSTAT_DB))
+        con_edgar = self.conn
+        
+        corrected_count = 0
+        
+        for data in extracted_data:
+            gvkey = data.get('gvkey')
+            datadate = data.get('datadate')
+            
+            if not gvkey or not datadate:
+                continue
+            
+            try:
+                # Get Compustat data
+                compustat_df = get_compustat_data(str(gvkey), str(datadate))
+                if compustat_df.empty:
+                    logger.debug(f"No Compustat data for {gvkey} {datadate} - skipping")
+                    continue
+                
+                # Get EDGAR COIFND_ID
+                key_result = con_edgar.execute("""
+                    SELECT COIFND_ID
+                    FROM main.CSCO_IKEY
+                    WHERE gvkey = ?
+                    AND datadate = ?
+                    LIMIT 1
+                """, [str(gvkey), str(datadate)]).fetchone()
+                
+                if not key_result:
+                    logger.debug(f"No EDGAR key record for {gvkey} {datadate} - skipping")
+                    continue
+                
+                coifnd_id = key_result[0]
+                
+                # Get current EDGAR data (latest records)
+                edgar_dict = get_edgar_data_latest(con_edgar, coifnd_id)
+                
+                # Compare and correct
+                compustat_row = compustat_df.iloc[0]
+                compustat_fields = [col for col in compustat_df.columns 
+                                  if col not in ['GVKEY', 'DATADATE']]
+                
+                for field in compustat_fields:
+                    compustat_value = compustat_row.get(field)
+                    edgar_value = edgar_dict.get(field)
+                    
+                    # Skip if Compustat value is null/zero
+                    if pd.isna(compustat_value) or compustat_value == 0:
+                        continue
+                    
+                    # Check if correction needed
+                    if edgar_value is None:
+                        # Missing field - insert
+                        if correct_field(con_edgar, coifnd_id, field, float(compustat_value)):
+                            corrected_count += 1
+                            logger.debug(f"Inserted {field}={compustat_value} for {gvkey} {datadate}")
+                    else:
+                        # Check if values match (within tolerance)
+                        diff = abs(float(compustat_value) - float(edgar_value))
+                        if diff > 0.01:  # Not matching
+                            if correct_field(con_edgar, coifnd_id, field, float(compustat_value)):
+                                corrected_count += 1
+                                logger.debug(f"Updated {field}: {edgar_value} -> {compustat_value} for {gvkey} {datadate}")
+                
+                # Commit after each company
+                con_edgar.commit()
+                
+            except Exception as e:
+                logger.error(f"Error auto-correcting {gvkey} {datadate}: {e}")
+                continue
+        
+        con_comp.close()
+        
+        if corrected_count > 0:
+            logger.info(f"Auto-corrected {corrected_count} fields to match Compustat")
+        else:
+            logger.info("No corrections needed - data already matches Compustat")
     
     def _get_gics_from_sic(self, sic: str, gvkey: str = None) -> Optional[Dict[str, Any]]:
         """

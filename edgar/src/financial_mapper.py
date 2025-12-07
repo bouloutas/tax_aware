@@ -75,6 +75,9 @@ def _get_xbrl_to_compustat_mapping() -> Dict[str, str]:
         'accountsreceivablenetcurrent': 'RECTQ',
         'accountsreceivablenet': 'RECTQ',
         'tradeandotherreceivablesnet': 'RECTQ',
+        'accountsreceivabletradenetcurrent': 'RECTAQ',  # Trade receivables
+        'accountsreceivabletradecurrent': 'RECTAQ',
+        'tradeaccountsreceivablenetcurrent': 'RECTAQ',
         'inventorynet': 'INVTQ',
         'inventory': 'INVTQ',
         'inventoryfinishedgoods': 'INVTQ',
@@ -678,6 +681,233 @@ def _get_xbrl_to_compustat_mapping() -> Dict[str, str]:
         # Receivables Items (detailed)
         'accountsreceivabletrade': 'RECTAQ',
         'accountsreceivabletradenet': 'RECTAQ',
+        'accountsreceivabletradenetcurrent': 'RECTAQ',
+        'accountsreceivabletradecurrent': 'RECTAQ',
+        'tradeaccountsreceivablenetcurrent': 'RECTAQ',
+        'tradeaccountsreceivable': 'RECTAQ',
+        'accountsreceivableothernetcurrent': 'RECTOQ',
+        'otherreceivablesnetcurrent': 'RECTOQ',
+        'accountsreceivableother': 'RECTOQ',
+        'incomebeforeextraordinaryitemsanddiscontinuedoperations': 'IBKIQ',
+        'incomelossbeforeextraordinaryitems': 'IBKIQ',
+        'netincomelossbeforeextraordinaryitems': 'IBKIQ',
+        'interestincomenet': 'NIITQ',
+        'netinterestincome': 'NIITQ',
+        'interestincome': 'NIITQ',
+        'netinterestmargin': 'NIMQ',
+        'interestmargin': 'NIMQ',
+        'netincomelosstotal': 'NITQ',
+        'netincometotal': 'NITQ',
+        'netoperatingincomeother': 'NOPIOQ',
+        'operatingincomeother': 'NOPIOQ',
+        'operatingexpensesother': 'XOPROQ',
+        'otherexpenses': 'XOPROQ',
+        'minorityinterestnoncurrent': 'LTMIBQ',
+        'noncontrollinginterestnoncurrent': 'LTMIBQ',
+        'minorityinterestlongterm': 'LTMIBQ',
+        'dividendspaidpreferredstock': 'DVPDPQ',
+        'preferredstockdividendspaid': 'DVPDPQ',
+        'dividendspaidpreferred': 'DVPDPQ',
+        'cashflowfromfinancingactivitiesother': 'FINCHQ',
+        'otherfinancingcashflow': 'FINCHQ',
+        'financingcashflowother': 'FINCHQ',
+        'accruedexpensescurrent': 'ACCOQ',
+        'accruedliabilitiescurrent': 'ACCOQ',
+        'accruedexpenses': 'ACCOQ',
+        'otherassetscurrent': 'ACOXQ',
+        'assetscurrentother': 'ACOXQ',
+        'otherassetsnoncurrent': 'AOTQ',
+        'assetsnoncurrentother': 'AOTQ',
+        'accountspayableother': 'APOQ',
+        'otherpayables': 'APOQ',
+        
+        # High-priority mappings for commonly used financial fields
+        # Cash Flow
+        'cashflowfromoperatingactivities': 'OANCFQ',
+        'operatingcashflow': 'OANCFQ',
+        'cashprovidedbyoperatingactivities': 'OANCFQ',
+        'cashfromoperatingactivities': 'OANCFQ',
+        'cashflowfrominvestingactivities': 'IVNCFQ',
+        'investingcashflow': 'IVNCFQ',
+        'cashprovidedbyinvestingactivities': 'IVNCFQ',
+        'cashfrominvestingactivities': 'IVNCFQ',
+        'cashflowfromfinancingactivities': 'FINCFQ',
+        'financingcashflow': 'FINCFQ',
+        'cashprovidedbyfinancingactivities': 'FINCFQ',
+        'cashfromfinancingactivities': 'FINCFQ',
+        'capitalexpenditures': 'CAPXQ',
+        'capex': 'CAPXQ',
+        'purchasesofpropertyplantandequipment': 'CAPXQ',
+        'additionspropertyplantandequipment': 'CAPXQ',
+        
+        # Working Capital
+        'currentassets': 'ACTQ',
+        'assetscurrent': 'ACTQ',
+        'currentliabilities': 'LCTQ',
+        'liabilitiescurrent': 'LCTQ',
+        'workingcapital': 'WCAPQ',
+        
+        # Debt
+        'longtermdebt': 'DLTTQ',
+        'longtermdebtnoncurrent': 'DLTTQ',
+        'debtlongterm': 'DLTTQ',
+        'shorttermdebt': 'DLCQ',
+        'debtcurrent': 'DLCQ',
+        'currentportionoflongtermdebt': 'DLCQ',
+        'notespayable': 'DLCQ',
+        'notespayablecurrent': 'DLCQ',
+        
+        # Equity
+        'totalstockholdersequity': 'SEQQ',
+        'totalequity': 'SEQQ',
+        'shareholdersequitytotal': 'SEQQ',
+        'commonstockholdersequity': 'CSTKEQ',
+        'commonstockequity': 'CSTKEQ',
+        
+        # Income Statement - Operating
+        'operatingincome': 'OIADPQ',
+        'operatingincomebeforedepreciation': 'OIBDPQ',
+        'ebitda': 'OIBDPQ',
+        'earningsbeforeinteresttaxesdepreciationamortization': 'OIBDPQ',
+        'grossprofit': 'GPQ',
+        'grossmargin': 'GPQ',
+        
+        # Income Statement - Expenses
+        'sgaexpense': 'XSGAQ',
+        'generaladministrativeexpense': 'XSGAQ',
+        'rdexpense': 'XRDQ',
+        'depreciationexpense': 'DPQ',
+        'amortizationexpense': 'DPQ',
+        
+        # Income Statement - Other
+        'interestanddividendincome': 'XIDOQ',
+        'otherincomeexpense': 'XOPRQ',
+        'otherincome': 'XOPRQ',
+        'otherexpense': 'XOPRQ',
+        
+        # Tax
+        'incometaxexpense': 'TXTQ',
+        'provisionforincometaxes': 'TXTQ',
+        'currentincometaxexpense': 'TXPQ',
+        'deferredincometaxexpense': 'TXDIQ',
+        
+        # Per Share
+        'earningspershare': 'EPSPIQ',
+        'earningspersharebasic': 'EPSPIQ',
+        'earningspersharediluted': 'EPSPXQ',
+        'earningspersharefullydiluted': 'EPSPXQ',
+        'dividendspershare': 'DVPSPQ',
+        'dividendspaidpershare': 'DVPSPQ',
+        
+        # Shares
+        'sharesoutstanding': 'CSHOQ',
+        'commonsharesoutstanding': 'CSHOQ',
+        'weightedaveragenumberofsharesoutstandingbasic': 'CSHOQ',
+        'weightedaveragenumberofsharesoutstandingdiluted': 'CSHFDQ',
+        
+        # Assets
+        'totalassets': 'ATQ',
+        'assets': 'ATQ',
+        'totalcurrentassets': 'ACTQ',
+        'totalnoncurrentassets': 'ANQ',
+        'noncurrentassets': 'ANQ',
+        
+        # Liabilities
+        'totalliabilities': 'LTQ',
+        'liabilities': 'LTQ',
+        'totalcurrentliabilities': 'LCTQ',
+        'totalnoncurrentliabilities': 'LNTQ',
+        'noncurrentliabilities': 'LNTQ',
+        
+        # Inventory
+        'inventoryfinishedgoods': 'INVTQ',
+        'inventoryworkinprocess': 'INVTQ',
+        'inventoryrawmaterials': 'INVTQ',
+        
+        # PPE
+        'ppe': 'PPENTQ',
+        'fixedassetsnet': 'PPENTQ',
+        
+        # Intangibles
+        'intangibleassets': 'INTANQ',
+        'goodwillnet': 'GDWLQ',
+        
+        # Accounts Payable
+        'accountspayablecurrent': 'APQ',
+        'tradeaccountspayable': 'APQ',
+        
+        # Accrued
+        'accruedliabilities': 'ACCOQ',
+        
+        # Retained Earnings
+        'accumulatedretainedearnings': 'REQ',
+        
+        # Other
+        'prepaidexpenses': 'XPPQ',
+        'prepaidexpensescurrent': 'XPPQ',
+        'otherassets': 'AOQ',
+        'otherliabilities': 'LOQ',
+        'otherliabilitiescurrent': 'LCOQ',
+        'otherliabilitiesnoncurrent': 'LNOQ',
+        
+        # Comprehensive mappings for items with differences (CHEQ, COGSQ, DLTTQ, XSGAQ)
+        # Cash and Cash Equivalents (CHEQ) - comprehensive
+        'cashandcashequivalentsatcarryingvalue': 'CHEQ',
+        'cashcashequivalentsandshortterminvestments': 'CHEQ',
+        'cashandshortterminvestments': 'CHEQ',
+        'cashandcashequivalentsincludingrestrictedcash': 'CHEQ',
+        'cashcashequivalentsrestrictedcashandrestrictedcashequivalents': 'CHEQ',
+        'cashandcashequivalentsatendofperiod': 'CHEQ',
+        'cashandcashequivalentsatbeginningofperiod': 'CHEQ',
+        'cashcashequivalentsandmarketablesecurities': 'CHEQ',
+        'cashandmarketablesecurities': 'CHEQ',
+        'cashandcashequivalentsandrestrictedcash': 'CHEQ',
+        'cashandcashequivalentsincludingrestrictedcashandrestrictedcashequivalents': 'CHEQ',
+        
+        # Cost of Goods Sold (COGSQ) - comprehensive
+        'costofsales': 'COGSQ',
+        'costofproductsandservicessold': 'COGSQ',
+        'costofrevenues': 'COGSQ',
+        'costofgoodssold': 'COGSQ',
+        'costofrevenueandsales': 'COGSQ',
+        'totalcostofrevenue': 'COGSQ',
+        'costofrevenueandoperatingexpenses': 'COGSQ',
+        'costofgoodssoldandservices': 'COGSQ',
+        'costofrevenueandsalesandmarketing': 'COGSQ',
+        
+        # Long-term Debt (DLTTQ) - comprehensive
+        'longtermdebtandcapitalleases': 'DLTTQ',
+        'longtermdebtnetofcurrentportion': 'DLTTQ',
+        'longtermdebtexcludingcurrentmaturities': 'DLTTQ',
+        'longtermdebtandobligations': 'DLTTQ',
+        'longtermdebtandcapitalleaseobligations': 'DLTTQ',
+        'longtermdebtandfinancingobligations': 'DLTTQ',
+        'longtermdebtandotherlongtermliabilities': 'DLTTQ',
+        'longtermdebtandcapitalleaseobligationsnetofcurrentportion': 'DLTTQ',
+        'longtermdebtandcapitalleaseobligationsnet': 'DLTTQ',
+        'longtermdebtandcapitalleaseobligationsexcludingcurrentportion': 'DLTTQ',
+        
+        # Selling, General & Administrative (XSGAQ) - comprehensive
+        'sgaexpense': 'XSGAQ',
+        'sellinggeneralandadministrativeexpenses': 'XSGAQ',
+        'sellinggeneraladministrativeexpenses': 'XSGAQ',
+        'sellinggeneraladministrativeexpense': 'XSGAQ',
+        'sellinggeneraladministrativeandotherexpenses': 'XSGAQ',
+        'sellinggeneraladministrativeandmarketingexpenses': 'XSGAQ',
+        'sellinggeneraladministrativeandresearchanddevelopmentexpenses': 'XSGAQ',
+        
+        # Accounts Receivable (RECTQ) - additional variations
+        'accountsreceivablegross': 'RECTQ',
+        'accountsreceivableafterallowancefordoubtfulaccounts': 'RECTQ',
+        'accountsreceivablelessallowancefordoubtfulaccounts': 'RECTQ',
+        
+        # Interest Expense (XINTQ) - additional variations
+        'interestexpenseondebt': 'XINTQ',
+        'interestexpenseonborrowings': 'XINTQ',
+        'interestexpenseonlongtermdebt': 'XINTQ',
+        'interestexpenseonshorttermdebt': 'XINTQ',
+        'totalinterestexpense': 'XINTQ',
+        'interestexpenseandfinancingcosts': 'XINTQ',
         'accountsreceivableother': 'RECTOQ',
         'otherreceivables': 'RECTOQ',
         'accountsreceivablerelatedparties': 'RECTRQ',
@@ -1263,7 +1493,18 @@ class FinancialMapper:
         self.db_path = db_path
         self.conn = duckdb.connect(str(db_path))
         self.ytd_tracker = {}  # {(gvkey, item, fiscal_year): last reported YTD value}
+        
         self.oci_accumulated_tracker = {}  # {(gvkey, item, fiscal_year, fiscal_quarter): accumulated OCI value}
+        
+        # IMPROVEMENT: Initialize field validator if available
+        try:
+            import sys
+            sys.path.insert(0, str(Path(__file__).parent.parent))
+            from src.field_validator import FieldValidator
+            self.field_validator = FieldValidator()
+        except ImportError:
+            self.field_validator = None
+            logger.debug("Field validator not available - validation disabled")
         self._ensure_tables()
     
     def _ensure_tables(self):
@@ -1299,7 +1540,8 @@ class FinancialMapper:
                 DATACODE TINYINT,
                 RST_TYPE VARCHAR,
                 THRUDATE TIMESTAMP,
-                VALUEI DOUBLE
+                VALUEI DOUBLE,
+                XBRL_TAG VARCHAR
             )
         """)
         
@@ -1457,7 +1699,8 @@ class FinancialMapper:
             'coifnd_id': coifnd_id,
             'effdate': filing_date,  # Effective date (filing date)
             'filing_type': filing_type,  # Store filing type for YTD conversion logic
-            'items': {}
+            'items': {},
+            'xbrl_tags': {}  # Track which XBRL tag was used for each Compustat item
         }
         
         # Map financial data to Compustat items
@@ -1473,6 +1716,24 @@ class FinancialMapper:
                     break
             normalized_key_clean = normalized_key.replace(':', '_').replace('-', '').replace('_', '').replace(' ', '').strip()
             item_code = xbrl_to_compustat.get(normalized_key_clean)
+            
+            # IMPROVEMENT: Try fuzzy matching if exact match not found
+            if not item_code:
+                # Try partial matches (substring matching)
+                for mapping_key, mapping_value in xbrl_to_compustat.items():
+                    # Check if normalized_key contains mapping_key or vice versa
+                    if mapping_key in normalized_key_clean or normalized_key_clean in mapping_key:
+                        # Calculate similarity (simple Jaccard-like)
+                        key_words = set(normalized_key_clean)
+                        mapping_words = set(mapping_key)
+                        if len(key_words) > 0 and len(mapping_words) > 0:
+                            similarity = len(key_words & mapping_words) / len(key_words | mapping_words)
+                            if similarity > 0.7:  # 70% similarity threshold
+                                item_code = mapping_value
+                                logger.debug(f"Fuzzy match: '{normalized_key_clean}' -> '{mapping_key}' -> {mapping_value} (similarity={similarity:.2f})")
+                                break
+            
+            # Fallback: keyword-based matching
             if not item_code:
                 high_priority_mappings = {
                     'XOPRQ': ['operating', 'expense'],
@@ -1486,6 +1747,7 @@ class FinancialMapper:
                     'CHQ': ['cash', 'increase', 'decrease', 'change'],
                     'CSH12Q': ['twelve', 'month', 'share'],
                     'EPSX12': ['twelve', 'month', 'earnings', 'pershare'],
+                    'RECTAQ': ['accounts', 'receivable', 'trade'],  # Trade receivables
                 }
                 for target_item, keywords in high_priority_mappings.items():
                     if all(kw in normalized_key_clean for kw in keywords):
@@ -1505,6 +1767,8 @@ class FinancialMapper:
             if item_code and item_code not in mapped['items']:
                 try:
                     mapped['items'][item_code] = float(value)
+                    # Track XBRL tag for legacy mappings
+                    mapped['xbrl_tags'][item_code] = key
                 except (ValueError, TypeError):
                     pass
                 continue
@@ -1599,6 +1863,9 @@ class FinancialMapper:
                     continue
                 try:
                     mapped['items'][item_code] = float(value)
+                    # Track XBRL tag for preferred sources
+                    if item_code not in mapped['xbrl_tags']:
+                        mapped['xbrl_tags'][item_code] = tag
                     break
                 except (ValueError, TypeError):
                     continue
@@ -2847,90 +3114,108 @@ class FinancialMapper:
                         self.ytd_tracker[key] = current_value
                     continue
 
-            # Determine if current_value is YTD or QTR
-            # Heuristics:
-            # 1. 10-K Q4 is almost always Annual (YTD).
-            # 2. For 10-Q Q2/Q3, if value is significantly larger than previous YTD, likely YTD.
-            # 3. If value is smaller than previous YTD (positive values), likely QTR.
+            # IMPROVED YTD DETECTION LOGIC
+            # Use enhanced detection with multiple heuristics and confidence scoring
+            # Check if YTD improvements are available
+            try:
+                from improve_ytd_conversion import detect_if_ytd, convert_ytd_to_quarterly, validate_ytd_conversion
+                ytd_improvements_available = True
+            except ImportError:
+                ytd_improvements_available = False
             
-            # Calculate ratio for heuristic (avoid div by zero)
-            ratio = abs(current_value) / abs(previous_ytd) if abs(previous_ytd) > 1e-6 else 0
-            
-            # Logic to decide if input is YTD
-            is_input_ytd = False
-            
-            if is_annual_filing and is_q4:
-                # 10-K Q4 is strictly Annual (YTD) for Income Statement items
-                is_input_ytd = True
-            elif is_10q and fiscal_quarter in (2, 3):
-                # For 10-Q Q2/Q3, check if value is YTD by comparing to previous YTD
-                # CRITICAL FIX: Improve detection logic
-                # If value is significantly larger (>1.5x) than previous YTD, it's definitely YTD
-                # If value is between 1.1x and 1.5x, it could be either - check if it's close to expected YTD
-                # If value is < previous YTD (for positive values), it's definitely QTR
-                if ratio > 1.5:
-                    # Definitely YTD - value is much larger
+            if ytd_improvements_available:
+                # Detect if value is YTD or quarterly
+                is_input_ytd, detection_confidence = detect_if_ytd(
+                    current_value, previous_ytd, fiscal_quarter, filing_type, item
+                )
+                
+                # Log low-confidence detections for review
+                if detection_confidence < 0.7:
+                    logger.debug(f"Low confidence YTD detection for {gvkey} {item} Q{fiscal_quarter}: "
+                               f"is_ytd={is_input_ytd}, confidence={detection_confidence:.2f}, "
+                               f"value={current_value}, prev_ytd={previous_ytd}")
+                
+                # Override with high-confidence rules
+                if is_annual_filing and is_q4:
+                    # 10-K Q4 is strictly Annual (YTD) for Income Statement items
                     is_input_ytd = True
-                elif ratio > 1.1:
-                    # Could be YTD or large quarterly - use heuristics
-                    # For revenue/income items, if value is close to 2x previous (Q1+Q2), it's likely YTD
-                    # For Q2: if value ≈ 2x Q1, it's YTD. If value ≈ Q1, it's quarterly
-                    # For Q3: if value ≈ 3x Q1, it's YTD. If value ≈ Q1 or Q2, it's quarterly
-                    expected_ytd_ratio = fiscal_quarter  # Q2 should be ~2x Q1, Q3 should be ~3x Q1
-                    if ratio >= expected_ytd_ratio * 0.8:  # Within 80% of expected YTD ratio
-                        is_input_ytd = True
-                    else:
-                        is_input_ytd = False
+                    detection_confidence = 1.0
                 elif current_value > 0 and current_value < previous_ytd:
                     # Value is smaller than previous YTD - definitely QTR
                     is_input_ytd = False
+                    detection_confidence = 0.9
+            else:
+                # Fallback to legacy logic
+                detection_confidence = 0.5
+                ratio = abs(current_value) / abs(previous_ytd) if abs(previous_ytd) > 1e-6 else 0
+                
+                if is_annual_filing and is_q4:
+                    is_input_ytd = True
+                elif is_10q and fiscal_quarter in (2, 3):
+                    if ratio > 1.5:
+                        is_input_ytd = True
+                    elif ratio > 1.1:
+                        expected_ytd_ratio = fiscal_quarter
+                        is_input_ytd = ratio >= expected_ytd_ratio * 0.8
+                    elif current_value > 0 and current_value < previous_ytd:
+                        is_input_ytd = False
+                    else:
+                        is_input_ytd = ratio >= 1.2
+                elif ratio > 1.2:
+                    is_input_ytd = True
                 else:
-                    # Ambiguous - for Q2/Q3, if ratio > 1.0, likely YTD (growth scenario)
-                    # But be conservative: if ratio < 1.2, treat as quarterly
-                    is_input_ytd = ratio >= 1.2
-            elif ratio > 1.2:
-                # Fallback: If value is > 1.2x previous YTD, it's likely the new YTD
-                is_input_ytd = True
+                    is_input_ytd = False
             
             if is_input_ytd:
-                # Input is YTD. Calculate QTR.
-                qtr_value = current_value - previous_ytd
+                # Input is YTD. Convert to quarterly using improved logic.
+                qtr_value, conversion_confidence = convert_ytd_to_quarterly(
+                    current_value, previous_ytd, fiscal_quarter, filing_type, item
+                )
+                
+                # Validate conversion result
+                is_valid, validation_error = validate_ytd_conversion(
+                    qtr_value, current_value, previous_ytd, item
+                )
+                
+                if not is_valid:
+                    logger.warning(f"YTD conversion validation failed for {gvkey} {item} Q{fiscal_quarter}: {validation_error}")
+                    # Try alternative: maybe value is already quarterly
+                    if detection_confidence < 0.7:
+                        logger.info(f"Low confidence detection, treating as quarterly: {item}")
+                        qtr_value = current_value
+                        new_ytd = previous_ytd + qtr_value if previous_ytd else current_value
+                        mapped_data['items'][item] = qtr_value
+                        self.ytd_tracker[key] = new_ytd
+                        continue
                 
                 # CRITICAL FIX: Validate sign for income statement items
-                # Revenue, income, and expense items should have appropriate signs
-                # For revenue/income items (REVTQ, SALEQ, NIQ, OIADPQ, etc.), quarterly should be positive
-                # For expense items (COGSQ, XSGAQ, etc.), quarterly should typically be positive (expenses are positive in accounting)
                 revenue_income_items = {'REVTQ', 'SALEQ', 'NIQ', 'IBQ', 'IBCOMQ', 'OIADPQ', 'OIBDPQ', 'PIQ', 'NOPIQ'}
                 expense_items = {'COGSQ', 'XSGAQ', 'XRDQ', 'XOPRQ', 'DPQ', 'XINTQ'}
                 
                 # If we get a negative value for revenue/income items, something is wrong
                 if item in revenue_income_items and qtr_value < 0:
                     logger.warning(f"Negative quarterly value for {item}: {qtr_value} (YTD: {current_value}, Previous YTD: {previous_ytd})")
-                    # If current YTD is less than previous YTD, it might be an error or the values are reversed
-                    # For now, take absolute value as a safety measure, but log the issue
-                    if abs(qtr_value) > abs(current_value) * 0.5:  # If difference is more than 50% of current, likely wrong
-                        logger.error(f"YTD conversion error for {item}: QTR={qtr_value}, Current YTD={current_value}, Previous YTD={previous_ytd}")
-                        # Try to recover: if current is much smaller, maybe previous was wrong
-                        # Or maybe current is actually quarterly, not YTD
-                        if current_value > 0 and current_value < abs(previous_ytd) * 0.5:
-                            # Current might be quarterly, not YTD
-                            logger.info(f"Treating {item} as quarterly instead of YTD (value too small)")
-                            qtr_value = current_value
-                            new_ytd = previous_ytd + qtr_value
-                            mapped_data['items'][item] = qtr_value
-                            self.ytd_tracker[key] = new_ytd
-                            continue
+                    # Try to recover: if current is much smaller, maybe previous was wrong
+                    if current_value > 0 and current_value < abs(previous_ytd) * 0.5:
+                        # Current might be quarterly, not YTD
+                        logger.info(f"Treating {item} as quarterly instead of YTD (value too small)")
+                        qtr_value = current_value
+                        new_ytd = previous_ytd + qtr_value if previous_ytd else current_value
+                        mapped_data['items'][item] = qtr_value
+                        self.ytd_tracker[key] = new_ytd
+                        continue
                 
+                # Store converted value
                 mapped_data['items'][item] = qtr_value
                 self.ytd_tracker[key] = current_value
                 
-                if item == 'NIQ' and gvkey == '012141':
+                if item == 'NIQ' and str(gvkey) == '012141':
                     # Debug log for MSFT NIQ
-                    logger.info(f"MSFT NIQ YTD conversion: QTR={qtr_value}, YTD={current_value}, PrevYTD={previous_ytd}")
+                    logger.info(f"MSFT NIQ YTD conversion: QTR={qtr_value}, YTD={current_value}, PrevYTD={previous_ytd}, Confidence={conversion_confidence:.2f}")
             else:
                 # Input is QTR. Calculate new YTD.
                 qtr_value = current_value
-                new_ytd = previous_ytd + qtr_value
+                new_ytd = previous_ytd + qtr_value if previous_ytd else current_value
                 mapped_data['items'][item] = qtr_value
                 self.ytd_tracker[key] = new_ytd
 
@@ -3224,65 +3509,109 @@ class FinancialMapper:
             # CRITICAL FIX: Always use UPDATE to prevent duplicates
             # Check for existing record with same EFFDATE to avoid duplicates from reprocessing
             for item_code, value in items.items():
-                # Check if record exists with same EFFDATE (same filing processed twice)
-                existing_same_effdate = self.conn.execute("""
-                    SELECT COUNT(*) FROM main.CSCO_IFNDQ 
-                    WHERE COIFND_ID = ? AND ITEM = ? AND EFFDATE = ?
-                """, [coifnd_id, item_code, effdate]).fetchone()[0]
-                
-                if existing_same_effdate > 0:
-                    # Update existing record with same EFFDATE (same filing)
-                    self.conn.execute("""
-                        UPDATE main.CSCO_IFNDQ 
-                        SET VALUEI = ?, DATACODE = 1, RST_TYPE = 'RE', THRUDATE = ?
-                        WHERE COIFND_ID = ? AND ITEM = ? AND EFFDATE = ?
-                    """, [value, effdate, coifnd_id, item_code, effdate])
-                else:
-                    # Check if ANY record exists for this item
-                    existing_item = self.conn.execute("""
-                        SELECT COUNT(*) FROM main.CSCO_IFNDQ 
-                        WHERE COIFND_ID = ? AND ITEM = ?
-                    """, [coifnd_id, item_code]).fetchone()[0]
-                    
-                    if existing_item > 0:
-                        # Update the latest existing record (to maintain single source of truth)
-                        # This handles the case where we're updating with a newer filing
-                        self.conn.execute("""
-                            UPDATE main.CSCO_IFNDQ 
-                            SET EFFDATE = ?, VALUEI = ?, DATACODE = 1, RST_TYPE = 'RE', THRUDATE = ?
-                            WHERE COIFND_ID = ? AND ITEM = ?
-                            AND EFFDATE = (
-                                SELECT MAX(EFFDATE) FROM main.CSCO_IFNDQ
-                                WHERE COIFND_ID = ? AND ITEM = ?
-                            )
-                        """, [effdate, value, effdate, coifnd_id, item_code, coifnd_id, item_code])
-                    else:
-                        # Insert new - only if no existing record
-                        # CRITICAL FIX: Validate value before insertion
-                        # For income statement items, ensure values are reasonable
-                        revenue_income_items = {'REVTQ', 'SALEQ', 'NIQ', 'IBQ', 'IBCOMQ', 'OIADPQ', 'OIBDPQ', 'PIQ', 'NOPIQ'}
-                        expense_items = {'COGSQ', 'XSGAQ', 'XRDQ', 'XOPRQ', 'DPQ', 'XINTQ'}
+                        # IMPROVED: Better duplicate handling with tie-breaker logic
+                        # Check if record exists with same EFFDATE (same filing processed twice)
+                        existing_same_effdate = self.conn.execute("""
+                            SELECT COUNT(*), MAX(ABS(VALUEI)) as max_abs_value
+                            FROM main.CSCO_IFNDQ
+                            WHERE COIFND_ID = ? AND ITEM = ? AND EFFDATE = ?
+                        """, [coifnd_id, item_code, effdate]).fetchone()
                         
-                        # Check if value is reasonable (not obviously wrong)
-                        is_valid = True
-                        if item_code in revenue_income_items:
-                            # Revenue/income should typically be positive for quarterly values
-                            # Allow some negative values (losses) but flag extreme negatives
-                            if value < -1000000:  # Very large negative, likely error
-                                logger.warning(f"Suspicious negative value for {item_code}: {value}, skipping insertion")
-                                is_valid = False
-                        elif item_code in expense_items:
-                            # Expenses should typically be positive
-                            if value < -1000000:  # Very large negative, likely error
-                                logger.warning(f"Suspicious negative value for {item_code}: {value}, skipping insertion")
-                                is_valid = False
+                        existing_count = existing_same_effdate[0]
+                        max_abs_value = existing_same_effdate[1] if existing_same_effdate[1] is not None else 0
                         
-                        if is_valid:
+                        if existing_count > 0:
+                            # Same filing processed - UPDATE existing record
+                            # If multiple records with same EFFDATE, prefer the one with larger absolute value
+                            # (more complete/correct value)
+                            if abs(value) > max_abs_value:
+                                # New value is larger (more complete), update the record with max absolute value
+                                self.conn.execute("""
+                                    UPDATE main.CSCO_IFNDQ
+                                    SET VALUEI = ?, DATACODE = 1, RST_TYPE = 'RE', THRUDATE = ?
+                                    WHERE COIFND_ID = ? AND ITEM = ? AND EFFDATE = ?
+                                    AND ABS(VALUEI) = (
+                                        SELECT MAX(ABS(VALUEI)) FROM main.CSCO_IFNDQ
+                                        WHERE COIFND_ID = ? AND ITEM = ? AND EFFDATE = ?
+                                    )
+                                """, [value, effdate, coifnd_id, item_code, effdate, coifnd_id, item_code, effdate])
+                            else:
+                                # Existing value is larger or same, just update metadata on the max value record
+                                # Get XBRL tag for this item if available
+                                xbrl_tag = mapped_data.get('xbrl_tags', {}).get(item_code)
+                                self.conn.execute("""
+                                    UPDATE main.CSCO_IFNDQ
+                                    SET DATACODE = 1, RST_TYPE = 'RE', THRUDATE = ?, XBRL_TAG = ?
+                                    WHERE COIFND_ID = ? AND ITEM = ? AND EFFDATE = ?
+                                    AND ABS(VALUEI) = (
+                                        SELECT MAX(ABS(VALUEI)) FROM main.CSCO_IFNDQ
+                                        WHERE COIFND_ID = ? AND ITEM = ? AND EFFDATE = ?
+                                    )
+                                """, [effdate, xbrl_tag, coifnd_id, item_code, effdate, coifnd_id, item_code, effdate])
+                            
+                            # Remove other duplicates with same EFFDATE but smaller absolute value
                             self.conn.execute("""
-                                INSERT INTO main.CSCO_IFNDQ 
-                                (COIFND_ID, EFFDATE, ITEM, DATACODE, RST_TYPE, THRUDATE, VALUEI)
-                                VALUES (?, ?, ?, 1, 'RE', ?, ?)
-                            """, [coifnd_id, effdate, item_code, effdate, value])
+                                DELETE FROM main.CSCO_IFNDQ
+                                WHERE COIFND_ID = ? AND ITEM = ? AND EFFDATE = ?
+                                AND ABS(VALUEI) < (
+                                    SELECT MAX(ABS(VALUEI)) FROM main.CSCO_IFNDQ
+                                    WHERE COIFND_ID = ? AND ITEM = ? AND EFFDATE = ?
+                                )
+                            """, [coifnd_id, item_code, effdate, coifnd_id, item_code, effdate])
+                        else:
+                            # Check if ANY record exists for this item
+                            existing_item = self.conn.execute("""
+                                SELECT COUNT(*) FROM main.CSCO_IFNDQ
+                                WHERE COIFND_ID = ? AND ITEM = ?
+                            """, [coifnd_id, item_code]).fetchone()[0]
+
+                            if existing_item > 0:
+                                # Update the latest existing record (to maintain single source of truth)
+                                # This handles the case where we're updating with a newer filing
+                                # Use EFFDATE DESC, then THRUDATE DESC, then ABS(VALUEI) DESC as tie-breaker
+                                # Get XBRL tag for this item if available
+                                xbrl_tag = mapped_data.get('xbrl_tags', {}).get(item_code)
+                                self.conn.execute("""
+                                    UPDATE main.CSCO_IFNDQ
+                                    SET EFFDATE = ?, VALUEI = ?, DATACODE = 1, RST_TYPE = 'RE', THRUDATE = ?, XBRL_TAG = ?
+                                    WHERE COIFND_ID = ? AND ITEM = ?
+                                    AND (EFFDATE, COALESCE(THRUDATE, EFFDATE), ABS(VALUEI)) = (
+                                        SELECT EFFDATE, COALESCE(THRUDATE, EFFDATE), ABS(VALUEI)
+                                        FROM main.CSCO_IFNDQ
+                                        WHERE COIFND_ID = ? AND ITEM = ?
+                                        ORDER BY EFFDATE DESC, COALESCE(THRUDATE, EFFDATE) DESC NULLS LAST, ABS(VALUEI) DESC
+                                        LIMIT 1
+                                    )
+                                """, [effdate, value, effdate, xbrl_tag, coifnd_id, item_code, coifnd_id, item_code])
+                            else:
+                                # Insert new - only if no existing record
+                                # CRITICAL FIX: Validate value before insertion
+                                # For income statement items, ensure values are reasonable
+                                revenue_income_items = {'REVTQ', 'SALEQ', 'NIQ', 'IBQ', 'IBCOMQ', 'OIADPQ', 'OIBDPQ', 'PIQ', 'NOPIQ'}
+                                expense_items = {'COGSQ', 'XSGAQ', 'XRDQ', 'XOPRQ', 'DPQ', 'XINTQ'}
+                                
+                                # Check if value is reasonable (not obviously wrong)
+                                is_valid = True
+                                if item_code in revenue_income_items:
+                                    # Revenue/income should typically be positive for quarterly values
+                                    # Allow some negative values (losses) but flag extreme negatives
+                                    if value < -1000000:  # Very large negative, likely error
+                                        logger.warning(f"Suspicious negative value for {item_code}: {value}, skipping insertion")
+                                        is_valid = False
+                                elif item_code in expense_items:
+                                    # Expenses should typically be positive
+                                    if value < -1000000:  # Very large negative, likely error
+                                        logger.warning(f"Suspicious negative value for {item_code}: {value}, skipping insertion")
+                                        is_valid = False
+                                
+                                if is_valid:
+                                    # Get XBRL tag for this item if available
+                                    xbrl_tag = mapped_data.get('xbrl_tags', {}).get(item_code)
+                                    self.conn.execute("""
+                                        INSERT INTO main.CSCO_IFNDQ 
+                                        (COIFND_ID, EFFDATE, ITEM, DATACODE, RST_TYPE, THRUDATE, VALUEI, XBRL_TAG)
+                                        VALUES (?, ?, ?, 1, 'RE', ?, ?, ?)
+                                    """, [coifnd_id, effdate, item_code, effdate, value, xbrl_tag])
             
         except Exception as e:
             logger.error(f"Error inserting financial data for {gvkey}: {e}")
@@ -3309,20 +3638,43 @@ class FinancialMapper:
             if is_per_share or is_price or is_ratio:
                 continue
             
+            # IMPROVED: Better unit detection and normalization
             # Smart detection: If value is already in millions (reasonable range: 0.1 to 10,000,000),
             # don't normalize. If it's in raw dollars (billions: > 10,000,000), normalize.
             # This handles cases where parser already normalized or didn't apply scale correctly.
             abs_value = abs(value)
+            
+            # Track if we've normalized to prevent double normalization
+            normalized = False
+            
             if abs_value > 10_000_000:
                 # Value is in raw dollars (billions), normalize to millions
                 items[item] = value / 1_000_000.0
+                normalized = True
             elif abs_value < 0.1 and abs_value > 0:
                 # Value is suspiciously small (might be double-normalized), try to fix
                 # But be careful - some items might legitimately be small
                 # Only fix if it's clearly wrong (like 0.061858 for revenue)
-                if item in ['REVTQ', 'SALEQ', 'ATQ', 'LTQ', 'NIQ', 'COGSQ', 'XSGAQ'] and abs_value < 1:
+                large_value_items = ['REVTQ', 'SALEQ', 'ATQ', 'LTQ', 'NIQ', 'COGSQ', 'XSGAQ', 
+                                   'DLTTQ', 'CHEQ', 'PPENTQ', 'OANCFQ']
+                if item in large_value_items and abs_value < 1:
                     # Likely double-normalized, multiply by 1M
                     items[item] = value * 1_000_000.0
+                    normalized = True
+            
+            # IMPROVEMENT: Validate normalized value is reasonable
+            if normalized:
+                final_value = abs(items[item])
+                # Check if normalized value is in reasonable range for this item type
+                if item.startswith('EPS') or item.startswith('DVPS'):
+                    # Per-share items should be small
+                    if final_value > 1000:
+                        logger.warning(f"Suspicious normalized value for {item}: {items[item]} (original: {value})")
+                else:
+                    # Financial items should be in millions range
+                    if final_value > 10_000_000:
+                        logger.warning(f"Suspicious normalized value for {item}: {items[item]} (original: {value})")
+            
             # Otherwise, assume value is already in millions (reasonable range)
 
     def close(self):
