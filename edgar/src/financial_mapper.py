@@ -6,6 +6,13 @@ from pathlib import Path
 from typing import Dict, Optional, Any, Sequence
 import duckdb
 
+# Import unit conversion rules
+try:
+    from src.unit_conversions import apply_unit_conversions
+    UNIT_CONVERSIONS_AVAILABLE = True
+except ImportError:
+    UNIT_CONVERSIONS_AVAILABLE = False
+
 logger = logging.getLogger(__name__)
 
 YTD_ITEMS = {
@@ -3637,6 +3644,14 @@ class FinancialMapper:
             
             if is_per_share or is_price or is_ratio:
                 continue
+            
+            # Apply unit conversion rules (from Q1 2025 batch analysis)
+            if UNIT_CONVERSIONS_AVAILABLE:
+                original_value = value
+                value = apply_unit_conversions(item, value)
+                if value != original_value:
+                    items[item] = value
+                    normalized = True
             
             # IMPROVED: Better unit detection and normalization
             # Smart detection: If value is already in millions (reasonable range: 0.1 to 10,000,000),
