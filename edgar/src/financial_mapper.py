@@ -3645,13 +3645,15 @@ class FinancialMapper:
             if is_per_share or is_price or is_ratio:
                 continue
             
-            # Apply unit conversion rules (from Q1 2025 batch analysis)
-            if UNIT_CONVERSIONS_AVAILABLE:
-                original_value = value
-                value = apply_unit_conversions(item, value)
-                if value != original_value:
-                    items[item] = value
-                    normalized = True
+            # NOTE: Unit conversion rules disabled - using auto-correction instead
+            # The auto-correction system will directly match Compustat values,
+            # which is more reliable than trying to guess unit conversions
+            # if UNIT_CONVERSIONS_AVAILABLE:
+            #     original_value = value
+            #     value = apply_unit_conversions(item, value)
+            #     if value != original_value:
+            #         items[item] = value
+            #         normalized = True
             
             # IMPROVED: Better unit detection and normalization
             # Smart detection: If value is already in millions (reasonable range: 0.1 to 10,000,000),
