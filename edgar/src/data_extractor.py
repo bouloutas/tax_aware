@@ -5,6 +5,7 @@ import logging
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 from datetime import date
+import re
 import duckdb
 
 from src.filing_parser import get_parser
@@ -292,7 +293,6 @@ class DataExtractor:
                 # Format phone number: remove spaces, keep digits only, format as "XXX XXX XXXX"
                 phone = company.get('PHONE', '')
                 if phone:
-                    import re
                     # Remove all non-digit characters
                     digits_only = re.sub(r'\D', '', str(phone))
                     # Format as "XXX XXX XXXX" if 10 digits
@@ -727,4 +727,3 @@ class DataExtractor:
         """Close database connection."""
         self.conn.close()
         self.financial_mapper.close()
-

@@ -6,13 +6,6 @@ from pathlib import Path
 from typing import Dict, Optional, Any, Sequence
 import duckdb
 
-# Import unit conversion rules
-try:
-    from src.unit_conversions import apply_unit_conversions
-    UNIT_CONVERSIONS_AVAILABLE = True
-except ImportError:
-    UNIT_CONVERSIONS_AVAILABLE = False
-
 logger = logging.getLogger(__name__)
 
 YTD_ITEMS = {
@@ -1763,6 +1756,9 @@ class FinancialMapper:
             if item_code and item_code != 'None':
                 try:
                     mapped['items'][item_code] = float(value)
+                    # Track XBRL tag for this mapping (critical for mapping learner)
+                    if item_code not in mapped['xbrl_tags']:
+                        mapped['xbrl_tags'][item_code] = key
                 except (ValueError, TypeError):
                     pass
         
@@ -1793,12 +1789,13 @@ class FinancialMapper:
         
         # 3) Preferred overrides for critical items
         preferred_sources = {
-            'REVTQ': ['revenuefromcontractwithcustomerexcludingassessedtax', 'salesrevenuenet'],
+            'REVTQ': ['revenuefromcontractwithcustomerexcludingassessedtax', 'salesrevenuenet', 'revenue'],
             'SALEQ': ['salesrevenuenet', 'revenuefromcontractwithcustomerexcludingassessedtax'],
             'COGSQ': ['costofgoodsandservicessold', 'cost_of_revenue'],
             'CEQQ': ['common_equity', 'equity', 'shareholdersequity', 'stockholdersequity'],
             'SEQQ': ['shareholdersequity', 'stockholdersequity'],
-            'ATQ': ['assets'],
+            'ATQ': ['assets', 'totalassets'],
+            'LTQ': ['liabilities', 'totalliabilities', 'liabilitiestotal'],  # Total Liabilities
             'ACTQ': ['current_assets', 'assetscurrent'],
             'LCTQ': ['current_liabilities', 'liabilitiescurrent'],
             'APQ': ['accounts_payable'],
@@ -3533,15 +3530,17 @@ class FinancialMapper:
                             # (more complete/correct value)
                             if abs(value) > max_abs_value:
                                 # New value is larger (more complete), update the record with max absolute value
+                                # CRITICAL FIX: Also update XBRL_TAG when updating value
+                                xbrl_tag = mapped_data.get('xbrl_tags', {}).get(item_code)
                                 self.conn.execute("""
                                     UPDATE main.CSCO_IFNDQ
-                                    SET VALUEI = ?, DATACODE = 1, RST_TYPE = 'RE', THRUDATE = ?
+                                    SET VALUEI = ?, DATACODE = 1, RST_TYPE = 'RE', THRUDATE = ?, XBRL_TAG = ?
                                     WHERE COIFND_ID = ? AND ITEM = ? AND EFFDATE = ?
                                     AND ABS(VALUEI) = (
                                         SELECT MAX(ABS(VALUEI)) FROM main.CSCO_IFNDQ
                                         WHERE COIFND_ID = ? AND ITEM = ? AND EFFDATE = ?
                                     )
-                                """, [value, effdate, coifnd_id, item_code, effdate, coifnd_id, item_code, effdate])
+                                """, [value, effdate, xbrl_tag, coifnd_id, item_code, effdate, coifnd_id, item_code, effdate])
                             else:
                                 # Existing value is larger or same, just update metadata on the max value record
                                 # Get XBRL tag for this item if available
@@ -3645,16 +3644,6 @@ class FinancialMapper:
             if is_per_share or is_price or is_ratio:
                 continue
             
-            # NOTE: Unit conversion rules disabled - using auto-correction instead
-            # The auto-correction system will directly match Compustat values,
-            # which is more reliable than trying to guess unit conversions
-            # if UNIT_CONVERSIONS_AVAILABLE:
-            #     original_value = value
-            #     value = apply_unit_conversions(item, value)
-            #     if value != original_value:
-            #         items[item] = value
-            #         normalized = True
-            
             # IMPROVED: Better unit detection and normalization
             # Smart detection: If value is already in millions (reasonable range: 0.1 to 10,000,000),
             # don't normalize. If it's in raw dollars (billions: > 10,000,000), normalize.
@@ -3663,6 +3652,13 @@ class FinancialMapper:
             
             # Track if we've normalized to prevent double normalization
             normalized = False
+
+            # Heuristic: some filings report dollars instead of millions; scale up by 1,000
+            # for high-magnitude items when values are in the tens of thousands.
+            scale_up_candidates = {'REVTQ', 'SALEQ', 'ATQ', 'CEQQ', 'CHEQ', 'OIADPQ', 'NIQ', 'LTQ'}
+            if item in scale_up_candidates and 1_000 <= abs_value < 1_000_000:
+                value = value * 1_000
+                abs_value = abs(value)
             
             if abs_value > 10_000_000:
                 # Value is in raw dollars (billions), normalize to millions
