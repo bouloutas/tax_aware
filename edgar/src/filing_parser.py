@@ -4,7 +4,7 @@ Parse SEC filings (XBRL, HTML, text) and extract data.
 import re
 import logging
 from pathlib import Path
-from typing import Dict, List, Optional, Any, Iterable
+from typing import Dict, List, Optional, Any, Iterable, Tuple
 from datetime import date
 from collections import defaultdict
 from bs4 import BeautifulSoup
@@ -338,9 +338,7 @@ class XBRLParser(FilingParser):
                                                 numeric *= (10 ** int(scale))
                                             except ValueError:
                                                 pass
-                                        
-                                        if numeric > 0:
-                                            return numeric
+                                        return numeric
                 except:
                     continue
         
@@ -362,9 +360,8 @@ class XBRLParser(FilingParser):
                                     numeric *= (10 ** int(scale_match.group(1)))
                                 except ValueError:
                                     pass
-                            
-                            if numeric > 0:
-                                return numeric
+
+                            return numeric
         
         return None
 
@@ -375,6 +372,8 @@ class XBRLParser(FilingParser):
         stripped = text.strip().replace(',', '')
         if not stripped:
             return None
+        if stripped.startswith('(') and stripped.endswith(')'):
+            stripped = f"-{stripped[1:-1].strip()}"
         try:
             return float(stripped)
         except ValueError:
@@ -479,7 +478,8 @@ class XBRLParser(FilingParser):
     
     def _extract_all_us_gaap_tags(self) -> Dict[str, float]:
         """Extract all us-gaap tags from XBRL for comprehensive coverage."""
-        all_tags = {}
+        all_tags: Dict[str, float] = {}
+        best_meta: Dict[str, Tuple[int, float]] = {}  # key -> (priority, abs(value))
         
         if not self.xbrl_root:
             return all_tags
@@ -494,6 +494,14 @@ class XBRLParser(FilingParser):
         # Also search in raw content for HTML-embedded XBRL
         if self.content:
             import re
+            cash_flow_us_gaap_keys = {
+                'netcashprovidedbyusedinoperatingactivities',
+                'cashflowfromoperatingactivities',
+                'netcashprovidedbyusedininvestingactivities',
+                'cashflowfrominvestingactivities',
+                'netcashprovidedbyusedinfinancingactivities',
+                'cashflowfromfinancingactivities',
+            }
             # Find all ix:nonFraction and ix:nonNumeric elements with us-gaap tags
             patterns = [
                 r'<ix:nonFraction([^>]*)name=["\']([^"\']*us-gaap:([^"\']+))["\'][^>]*>([^<]+)</ix:nonFraction>',
@@ -530,8 +538,29 @@ class XBRLParser(FilingParser):
                             
                             # Use tag name as key (normalize)
                             key = tag_name.lower().replace('us-gaap:', '').replace(':', '_')
-                            if key not in all_tags or abs(value) > abs(all_tags[key]):
-                                all_tags[key] = value
+                            if key in cash_flow_us_gaap_keys:
+                                # Prefer quarterly/QTD contexts over YTD for cash-flow totals.
+                                context_match = re.search(r'contextRef=["\']([^"\']+)["\']', attrs, re.IGNORECASE)
+                                context_ref = context_match.group(1) if context_match else ''
+                                context_lower = context_ref.lower()
+                                is_ytd = 'ytd' in context_lower or 'year' in context_lower or 'cumulative' in context_lower
+                                is_qtr = 'qtd' in context_lower or 'qtr' in context_lower or 'quarter' in context_lower
+                                if is_ytd:
+                                    priority = 1
+                                elif is_qtr:
+                                    priority = 3
+                                elif context_ref:
+                                    priority = 2
+                                else:
+                                    priority = 0
+
+                                prev = best_meta.get(key)
+                                if prev is None or priority > prev[0] or (priority == prev[0] and abs(value) > prev[1]):
+                                    best_meta[key] = (priority, abs(value))
+                                    all_tags[key] = value
+                            else:
+                                if key not in all_tags or abs(value) > abs(all_tags[key]):
+                                    all_tags[key] = value
                         except ValueError:
                             continue
         
@@ -1452,4 +1481,3 @@ def get_parser(filing_path: Path) -> FilingParser:
     
     # Fallback to text parser
     return TextParser(filing_path)
-

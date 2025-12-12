@@ -1789,7 +1789,17 @@ class FinancialMapper:
         
         # 3) Preferred overrides for critical items
         preferred_sources = {
-            'REVTQ': ['revenuefromcontractwithcustomerexcludingassessedtax', 'salesrevenuenet', 'revenue'],
+            'REVTQ': [
+                'revenuefromcontractwithcustomerexcludingassessedtax',
+                'salesrevenuenet',
+                'revenue',
+                'revenues',
+                'revenuenet',
+                'revenuefromcontractswithcustomers',
+                'revenuefromcontractwithcustomerincludingassessedtax',
+                'revenuefromcontractswithcustomersincludingassessedtax',
+                'salesrevenuenetofreturnsandallowances',
+            ],
             'SALEQ': ['salesrevenuenet', 'revenuefromcontractwithcustomerexcludingassessedtax'],
             'COGSQ': ['costofgoodsandservicessold', 'cost_of_revenue'],
             'CEQQ': ['common_equity', 'equity', 'shareholdersequity', 'stockholdersequity'],
@@ -1819,6 +1829,11 @@ class FinancialMapper:
             'IVNCFQ': ['investing_cash_flow'],
             'FINCFQ': ['financing_cash_flow'],
             'CAPXQ': ['capex', 'capitalexpenditures'],
+            # LTQ: allow explicit scaling to handle cases reported in thousands
+            'LTQ_1X': ['liabilities', 'totalliabilities', 'liabilitiestotal'],
+            'LTQ_0_001': ['liabilities_thousands'],  # pseudo-tag for scaled cases
+            # LTQ scaling is critical; prefer tagged liabilities forms
+            'LTQ': ['liabilities', 'totalliabilities', 'liabilitiestotal'],
             'CSHPRQ': [
                 'weightedaveragenumberofsharesoutstandingbasic',
                 'weightedaveragenumberofsharesoutstandingbasicanddiluted',
@@ -1831,7 +1846,13 @@ class FinancialMapper:
                 'shares_outstanding'
             ],
             'CSHOQ': ['commonstocksharesoutstanding', 'shares_outstanding'],
-            'EPSPXQ': ['earningspersharebasic', 'eps_basic'],
+            'EPSPXQ': [
+                'earningspersharebasic',
+                'eps_basic',
+                'earningspershare',
+                'basicearningspershare',
+                'earningspersharebasicanddiluted',
+            ],
             'EPSPIQ': ['earningspersharediluted', 'eps_diluted'],
             'CSHOPQ': ['commonstocksharesoutstanding', 'shares_outstanding', 'sharesoutstanding'],
             'PRCRAQ': ['accountsreceivabletradecurrent', 'accountsreceivablecurrent'],
@@ -1861,6 +1882,35 @@ class FinancialMapper:
             'XSGAQ': ['sellinggeneralandadministrativeexpense', 'sellinggeneralandadministrativeexpenses', 'sga_expense'],
         }
         for item_code, tags in preferred_sources.items():
+            # Special-case handling for LTQ scale detection
+            if item_code == 'LTQ':
+                # Try 1x scale first
+                for tag in tags:
+                    value = financial_data.get(tag)
+                    if value is None:
+                        continue
+                    try:
+                        mapped['items'][item_code] = float(value)
+                        if item_code not in mapped['xbrl_tags']:
+                            mapped['xbrl_tags'][item_code] = tag
+                        break
+                    except (ValueError, TypeError):
+                        continue
+                # If still not set, try scaled down (assume thousands) from any tag present
+                if 'LTQ' not in mapped['items']:
+                    for tag in tags:
+                        value = financial_data.get(tag)
+                        if value is None:
+                            continue
+                        try:
+                            mapped['items'][item_code] = float(value) * 0.001
+                            if item_code not in mapped['xbrl_tags']:
+                                mapped['xbrl_tags'][item_code] = tag
+                            break
+                        except (ValueError, TypeError):
+                            continue
+                continue
+
             for tag in tags:
                 value = financial_data.get(tag)
                 if value is None:
@@ -2975,6 +3025,7 @@ class FinancialMapper:
         gvkey = mapped_data['gvkey']
         fiscal_year = mapped_data['fiscal_year']
         fiscal_quarter = mapped_data['fiscal_quarter']
+        sign_invert_items = {'IVNCFQ'}
         
         # Debug: Log all YTD conversions for MSFT
         if str(gvkey) == '012141':
@@ -2992,6 +3043,8 @@ class FinancialMapper:
             if fiscal_quarter == 1:
                 mapped_data['items'][item] = current_value
                 self.ytd_tracker[key] = current_value
+                if item in sign_invert_items:
+                    mapped_data['items'][item] = -mapped_data['items'][item]
                 continue
 
             # Retrieve previous YTD value (from Q1, Q2, or Q3)
@@ -3001,6 +3054,7 @@ class FinancialMapper:
             is_annual_filing = '10-K' in filing_type or '20-F' in filing_type
             is_q4 = fiscal_quarter == 4
             is_10q = '10-Q' in filing_type
+            cash_flow_ytd_items = {'OANCFQ', 'IVNCFQ', 'FINCFQ'}
             
             # For Q4 10-K filings, always try to get YTD from DB to ensure accuracy
             # The tracker might have incorrect values if Q1-Q3 weren't processed correctly
@@ -3024,7 +3078,32 @@ class FinancialMapper:
                         ORDER BY k.FQTR
                     """, [gvkey, item, fiscal_year, fiscal_quarter, gvkey, fiscal_year, fiscal_quarter]).fetchall()
                     
-                    if quarter_data:
+                    if item in cash_flow_ytd_items and previous_ytd is None:
+                        # Cash-flow statements in 10-K are annual (YTD). We only convert to Q4
+                        # quarterly when we have full Q1-Q3 history to subtract.
+                        if quarter_data and len(quarter_data) >= 3:
+                            previous_ytd = sum(value for _, value in quarter_data)
+                            if previous_ytd is not None and abs(previous_ytd) > 1e-9:
+                                self.ytd_tracker[key] = previous_ytd
+                                logger.info(
+                                    f"Q4 10-K cash-flow: Using sum of Q1-Q3 for {gvkey} {item} FY{fiscal_year}: {previous_ytd}"
+                                )
+                        else:
+                            # No reliable history: skip Q4 cash-flow item rather than storing annual value.
+                            mapped_data['items'].pop(item, None)
+                            mapped_data.get('xbrl_tags', {}).pop(item, None)
+                            # Remove any stale annual cash-flow rows from prior runs.
+                            coifnd_id = mapped_data.get('coifnd_id')
+                            if coifnd_id:
+                                try:
+                                    self.conn.execute(
+                                        "DELETE FROM main.CSCO_IFNDQ WHERE COIFND_ID = ? AND ITEM = ?",
+                                        [coifnd_id, item],
+                                    )
+                                except Exception as exc:  # pragma: no cover - depends on runtime DB state
+                                    logger.debug(f"Failed to delete stale Q4 cash-flow row for {gvkey} {item}: {exc}")
+                            continue
+                    elif quarter_data:
                         # Convert YTD values to quarterly by detecting if value is cumulative
                         quarterly_values = []
                         running_ytd = 0
@@ -3050,7 +3129,7 @@ class FinancialMapper:
                         
                         # CRITICAL FIX: Sum all quarterly values to get total YTD
                         db_ytd = sum(quarterly_values)
-                        if db_ytd is not None and db_ytd > 0:
+                        if db_ytd is not None and abs(db_ytd) > 1e-9:
                             previous_ytd = db_ytd
                             logger.info(f"Q4 10-K: Retrieved YTD Q1-Q3 from DB for {gvkey} {item} FY{fiscal_year}: {previous_ytd} (Q1={quarterly_values[0] if len(quarterly_values) > 0 else 0}, Q2={quarterly_values[1] if len(quarterly_values) > 1 else 0}, Q3={quarterly_values[2] if len(quarterly_values) > 2 else 0}, sum={db_ytd})")
                 except Exception as e:
@@ -3098,7 +3177,7 @@ class FinancialMapper:
                         
                         # CRITICAL FIX: Sum all quarterly values to get total YTD
                         db_ytd = sum(quarterly_values)
-                        if db_ytd is not None and db_ytd > 0:
+                        if db_ytd is not None and abs(db_ytd) > 1e-9:
                             previous_ytd = db_ytd
                             logger.info(f"Retrieved YTD from DB for {gvkey} {item} FY{fiscal_year} Q{fiscal_quarter}: {previous_ytd} (from {len(quarterly_values)} quarters)")
                             # Update tracker so future quarters can use it
@@ -3107,15 +3186,36 @@ class FinancialMapper:
                     logger.debug(f"Could not query DB for YTD: {e}")
                 
                 if previous_ytd is None:
-                    # Still no previous YTD
+                    # Still no previous YTD. If this is a Q4 annual filing for an income-statement YTD item,
+                    # we should not store the annual-as-quarterly value.
+                    if is_annual_filing and is_q4 and item not in cash_flow_ytd_items:
+                        mapped_data['items'].pop(item, None)
+                        mapped_data.get('xbrl_tags', {}).pop(item, None)
+                        coifnd_id = mapped_data.get('coifnd_id')
+                        if coifnd_id:
+                            try:
+                                self.conn.execute(
+                                    "DELETE FROM main.CSCO_IFNDQ WHERE COIFND_ID = ? AND ITEM = ?",
+                                    [coifnd_id, item],
+                                )
+                            except Exception as exc:  # pragma: no cover
+                                logger.debug(
+                                    f"Failed to delete stale Q4 annual row for {gvkey} {item}: {exc}"
+                                )
+                        continue
+
                     # For Q1, store as YTD. For other quarters, assume current is QTR and store as YTD estimate.
                     if fiscal_quarter == 1:
                         mapped_data['items'][item] = current_value
                         self.ytd_tracker[key] = current_value
+                        if item in sign_invert_items:
+                            mapped_data['items'][item] = -mapped_data['items'][item]
                     else:
                         # Missing history - assume current is QTR
                         mapped_data['items'][item] = current_value
                         self.ytd_tracker[key] = current_value
+                        if item in sign_invert_items:
+                            mapped_data['items'][item] = -mapped_data['items'][item]
                     continue
 
             # IMPROVED YTD DETECTION LOGIC
@@ -3190,6 +3290,8 @@ class FinancialMapper:
                         new_ytd = previous_ytd + qtr_value if previous_ytd else current_value
                         mapped_data['items'][item] = qtr_value
                         self.ytd_tracker[key] = new_ytd
+                        if item in sign_invert_items:
+                            mapped_data['items'][item] = -mapped_data['items'][item]
                         continue
                 
                 # CRITICAL FIX: Validate sign for income statement items
@@ -3207,11 +3309,15 @@ class FinancialMapper:
                         new_ytd = previous_ytd + qtr_value if previous_ytd else current_value
                         mapped_data['items'][item] = qtr_value
                         self.ytd_tracker[key] = new_ytd
+                        if item in sign_invert_items:
+                            mapped_data['items'][item] = -mapped_data['items'][item]
                         continue
                 
                 # Store converted value
                 mapped_data['items'][item] = qtr_value
                 self.ytd_tracker[key] = current_value
+                if item in sign_invert_items:
+                    mapped_data['items'][item] = -mapped_data['items'][item]
                 
                 if item == 'NIQ' and str(gvkey) == '012141':
                     # Debug log for MSFT NIQ
@@ -3222,6 +3328,8 @@ class FinancialMapper:
                 new_ytd = previous_ytd + qtr_value if previous_ytd else current_value
                 mapped_data['items'][item] = qtr_value
                 self.ytd_tracker[key] = new_ytd
+                if item in sign_invert_items:
+                    mapped_data['items'][item] = -mapped_data['items'][item]
 
     def _ensure_receivable_breakouts(self, mapped_data: Dict[str, Any], financial_data: Dict[str, Any]):
         items = mapped_data['items']
@@ -3430,13 +3538,16 @@ class FinancialMapper:
             shares_diluted = shares_basic
 
         net_income = items.get('NIQ') or items.get('IBQ')
-        if net_income is not None and shares_basic not in (None, 0):
+        if 'EPSPXQ' not in items and net_income is not None and shares_basic not in (None, 0):
             items['EPSPXQ'] = net_income / shares_basic
         if net_income is not None and shares_diluted not in (None, 0):
             eps_diluted = net_income / shares_diluted
-            items['EPSPIQ'] = eps_diluted
-            items['EPSFIQ'] = eps_diluted
-            items['EPSFXQ'] = eps_diluted
+            if 'EPSPIQ' not in items:
+                items['EPSPIQ'] = eps_diluted
+            if 'EPSFIQ' not in items:
+                items['EPSFIQ'] = eps_diluted
+            if 'EPSFXQ' not in items:
+                items['EPSFXQ'] = eps_diluted
 
     def insert_financial_data(self, mapped_data: Dict[str, Any]):
         """Insert mapped financial data into database."""
@@ -3659,6 +3770,21 @@ class FinancialMapper:
             if item in scale_up_candidates and 1_000 <= abs_value < 1_000_000:
                 value = value * 1_000
                 abs_value = abs(value)
+                # Track the rescaled value for downstream logic
+                items[item] = value
+
+            # Cash-flow items are often extracted in thousands when inline XBRL scale is missed.
+            # If values are implausibly large for quarterly cash flows, scale down by 1,000.
+            cash_flow_items = {'OANCFQ', 'IVNCFQ', 'FINCFQ'}
+            if item in cash_flow_items and 100_000 <= abs_value < 10_000_000:
+                value = value / 1_000.0
+                abs_value = abs(value)
+                items[item] = value
+
+            # LTQ-specific fallback: if still very small, assume thousands and scale
+            if item == 'LTQ' and abs_value > 0 and abs_value < 5_000:
+                value = value * 1_000
+                items[item] = value
             
             if abs_value > 10_000_000:
                 # Value is in raw dollars (billions), normalize to millions
