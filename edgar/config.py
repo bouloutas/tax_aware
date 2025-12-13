@@ -29,10 +29,10 @@ SEC_EDGAR_INDEX_URL = "https://www.sec.gov/Archives/edgar/full-index"
 FILING_TYPES = [
     "10-K",      # Annual report
     "10-Q",      # Quarterly report
-    "8-K",       # Current report
-    "DEF 14A",   # Proxy statement
+    "20-F",      # Foreign annual report
     "10-K/A",    # Amended annual report
     "10-Q/A",    # Amended quarterly report
+    "20-F/A",    # Amended foreign annual report
 ]
 
 # Rate limiting (SEC requires delays between requests)
@@ -60,4 +60,3 @@ SEC_RSS_FEEDS = {
 
 # Reference database for validation
 COMPUSTAT_REFERENCE_DB = PROJECT_ROOT / "legacy" / "compustat.duckdb"
-

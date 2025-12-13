@@ -143,10 +143,11 @@ class FilingParser:
 
 class XBRLParser(FilingParser):
     """Parser for XBRL filings."""
-    
+
     def __init__(self, filing_path: Path):
         super().__init__(filing_path)
         self.xbrl_root = None
+        self.context_periods = {}  # Map context ID -> {'type': 'INSTANT'|'DURATION', 'start': date, 'end': date, 'days': int}
     
     def load(self):
         """Load XBRL content."""
@@ -179,6 +180,216 @@ class XBRLParser(FilingParser):
         for elem in self.xbrl_root.iter():
             local = self._local_name(elem.tag)
             self.elements_by_local[local].append(elem)
+        # Also build context period index
+        self._build_context_periods()
+
+    def _build_context_periods(self) -> None:
+        """Build a map of context IDs to their period information."""
+        from datetime import datetime
+
+        self.context_periods = {}
+
+        # Try to find context elements using various patterns
+        context_patterns = [
+            './/{http://www.xbrl.org/2003/instance}context',
+            './/context',
+            './/{*}context',
+        ]
+
+        contexts = []
+        for pattern in context_patterns:
+            try:
+                found = self.xbrl_root.findall(pattern)
+                if found:
+                    contexts = found
+                    break
+            except:
+                continue
+
+        for ctx in contexts:
+            ctx_id = ctx.get('id', '')
+            if not ctx_id:
+                continue
+
+            period_info = {'type': 'UNKNOWN', 'start': None, 'end': None, 'days': 0}
+
+            # Find period element
+            period_patterns = [
+                './/{http://www.xbrl.org/2003/instance}period',
+                './/period',
+                './/{*}period',
+            ]
+
+            period_elem = None
+            for pp in period_patterns:
+                try:
+                    period_elem = ctx.find(pp)
+                    if period_elem is not None:
+                        break
+                except:
+                    continue
+
+            if period_elem is None:
+                self.context_periods[ctx_id] = period_info
+                continue
+
+            # Check for instant or duration
+            instant_patterns = [
+                './/{http://www.xbrl.org/2003/instance}instant',
+                './/instant',
+                './/{*}instant',
+            ]
+            start_patterns = [
+                './/{http://www.xbrl.org/2003/instance}startDate',
+                './/startDate',
+                './/{*}startDate',
+            ]
+            end_patterns = [
+                './/{http://www.xbrl.org/2003/instance}endDate',
+                './/endDate',
+                './/{*}endDate',
+            ]
+
+            instant_elem = None
+            for ip in instant_patterns:
+                try:
+                    instant_elem = period_elem.find(ip)
+                    if instant_elem is not None:
+                        break
+                except:
+                    continue
+
+            if instant_elem is not None and instant_elem.text:
+                # Point in time - balance sheet
+                period_info['type'] = 'INSTANT'
+                try:
+                    period_info['end'] = datetime.strptime(instant_elem.text.strip(), '%Y-%m-%d').date()
+                except:
+                    pass
+            else:
+                # Duration - check start and end
+                start_elem = None
+                end_elem = None
+
+                for sp in start_patterns:
+                    try:
+                        start_elem = period_elem.find(sp)
+                        if start_elem is not None:
+                            break
+                    except:
+                        continue
+
+                for ep in end_patterns:
+                    try:
+                        end_elem = period_elem.find(ep)
+                        if end_elem is not None:
+                            break
+                    except:
+                        continue
+
+                if start_elem is not None and start_elem.text and end_elem is not None and end_elem.text:
+                    try:
+                        start_date = datetime.strptime(start_elem.text.strip(), '%Y-%m-%d').date()
+                        end_date = datetime.strptime(end_elem.text.strip(), '%Y-%m-%d').date()
+                        days = (end_date - start_date).days
+
+                        period_info['type'] = 'DURATION'
+                        period_info['start'] = start_date
+                        period_info['end'] = end_date
+                        period_info['days'] = days
+                    except:
+                        pass
+
+            self.context_periods[ctx_id] = period_info
+
+        # Also parse from raw content for inline XBRL
+        if self.content and len(self.context_periods) < 10:
+            self._build_context_periods_from_raw()
+
+    def _build_context_periods_from_raw(self) -> None:
+        """Parse context periods from raw content (for inline XBRL)."""
+        from datetime import datetime
+        import re
+
+        # Find all context blocks
+        context_pattern = r'<context[^>]*id=["\']([^"\']+)["\'][^>]*>(.*?)</context>'
+        matches = re.findall(context_pattern, self.content, re.DOTALL | re.IGNORECASE)
+
+        for ctx_id, ctx_content in matches:
+            if ctx_id in self.context_periods and self.context_periods[ctx_id]['type'] != 'UNKNOWN':
+                continue
+
+            period_info = {'type': 'UNKNOWN', 'start': None, 'end': None, 'days': 0}
+
+            # Check for instant
+            instant_match = re.search(r'<instant[^>]*>(\d{4}-\d{2}-\d{2})</instant>', ctx_content, re.IGNORECASE)
+            if instant_match:
+                period_info['type'] = 'INSTANT'
+                try:
+                    period_info['end'] = datetime.strptime(instant_match.group(1), '%Y-%m-%d').date()
+                except:
+                    pass
+            else:
+                # Check for startDate and endDate
+                start_match = re.search(r'<startDate[^>]*>(\d{4}-\d{2}-\d{2})</startDate>', ctx_content, re.IGNORECASE)
+                end_match = re.search(r'<endDate[^>]*>(\d{4}-\d{2}-\d{2})</endDate>', ctx_content, re.IGNORECASE)
+
+                if start_match and end_match:
+                    try:
+                        start_date = datetime.strptime(start_match.group(1), '%Y-%m-%d').date()
+                        end_date = datetime.strptime(end_match.group(1), '%Y-%m-%d').date()
+                        days = (end_date - start_date).days
+
+                        period_info['type'] = 'DURATION'
+                        period_info['start'] = start_date
+                        period_info['end'] = end_date
+                        period_info['days'] = days
+                    except:
+                        pass
+
+            self.context_periods[ctx_id] = period_info
+
+    def get_period_type(self, context_id: str) -> str:
+        """
+        Determine period type from context ID.
+
+        Returns one of:
+        - 'INSTANT': Point-in-time (balance sheet)
+        - 'QTD': Single quarter duration (~90 days)
+        - 'YTD_H1': Year-to-date first half (~180 days)
+        - 'YTD_9M': Year-to-date 9 months (~270 days)
+        - 'YTD_ANNUAL': Full year (~365 days)
+        - 'UNKNOWN': Cannot determine
+        """
+        if not context_id:
+            return 'UNKNOWN'
+
+        period_info = self.context_periods.get(context_id, {})
+        period_type = period_info.get('type', 'UNKNOWN')
+
+        if period_type == 'INSTANT':
+            return 'INSTANT'
+
+        if period_type == 'DURATION':
+            days = period_info.get('days', 0)
+
+            if days <= 100:  # ~3 months
+                return 'QTD'
+            elif days <= 200:  # ~6 months
+                return 'YTD_H1'
+            elif days <= 290:  # ~9 months
+                return 'YTD_9M'
+            else:  # ~12 months
+                return 'YTD_ANNUAL'
+
+        # Fallback: check context ID naming conventions
+        ctx_lower = context_id.lower()
+        if 'ytd' in ctx_lower or 'year' in ctx_lower or 'cumulative' in ctx_lower:
+            return 'YTD_ANNUAL'  # Assume annual if marked YTD
+        elif 'qtd' in ctx_lower or 'qtr' in ctx_lower or 'quarter' in ctx_lower:
+            return 'QTD'
+
+        return 'UNKNOWN'
 
     @staticmethod
     def _local_name(tag: str) -> str:
@@ -331,11 +542,20 @@ class XBRLParser(FilingParser):
                                 if search_term.lower() in name_attr.lower() or name_attr.endswith(f':{variant}'):
                                     numeric = self._to_float(elem.text)
                                     if numeric is not None:
-                                        # Handle scale attribute
+                                        # Handle scale attribute - convert to millions (Compustat standard)
+                                        # scale="6" means value is in millions (use as-is)
+                                        # scale="3" means value is in thousands (divide by 1000)
+                                        # scale="0" means value is in raw units (divide by 1,000,000)
+                                        # scale="9" means value is in billions (multiply by 1000)
                                         scale = elem.get('scale')
                                         if scale:
                                             try:
-                                                numeric *= (10 ** int(scale))
+                                                scale_int = int(scale)
+                                                # Convert to millions (scale=6)
+                                                if scale_int != 6:
+                                                    # Adjust relative to millions
+                                                    adjustment = scale_int - 6
+                                                    numeric *= (10 ** adjustment)
                                             except ValueError:
                                                 pass
                                         return numeric
@@ -353,11 +573,15 @@ class XBRLParser(FilingParser):
                     for attrs, value in matches:
                         numeric = self._to_float(value)
                         if numeric is not None:
-                            # Extract scale from attributes
+                            # Extract scale from attributes and convert to millions
                             scale_match = re.search(r'scale=["\']([-\d]+)["\']', attrs)
                             if scale_match:
                                 try:
-                                    numeric *= (10 ** int(scale_match.group(1)))
+                                    scale_int = int(scale_match.group(1))
+                                    # Convert to millions (scale=6 is baseline)
+                                    if scale_int != 6:
+                                        adjustment = scale_int - 6
+                                        numeric *= (10 ** adjustment)
                                 except ValueError:
                                     pass
 
@@ -479,35 +703,42 @@ class XBRLParser(FilingParser):
     def _extract_all_us_gaap_tags(self) -> Dict[str, float]:
         """Extract all us-gaap tags from XBRL for comprehensive coverage."""
         all_tags: Dict[str, float] = {}
-        best_meta: Dict[str, Tuple[int, float]] = {}  # key -> (priority, abs(value))
-        
+        best_meta: Dict[str, Tuple[int, float, str]] = {}  # key -> (priority, abs(value), period_type)
+
         if not self.xbrl_root:
             return all_tags
-        
+
         # Find all elements with us-gaap namespace
         us_gaap_patterns = [
             './/{http://fasb.org/us-gaap/}*',
             './/us-gaap:*',
             './/*[starts-with(local-name(), "us-gaap:")]',
         ]
-        
+
         # Also search in raw content for HTML-embedded XBRL
         if self.content:
             import re
-            cash_flow_us_gaap_keys = {
+            # Items where period type matters (income statement and cash flow)
+            period_sensitive_keys = {
                 'netcashprovidedbyusedinoperatingactivities',
                 'cashflowfromoperatingactivities',
                 'netcashprovidedbyusedininvestingactivities',
                 'cashflowfrominvestingactivities',
                 'netcashprovidedbyusedinfinancingactivities',
                 'cashflowfromfinancingactivities',
+                'revenues',
+                'revenuefromcontractwithcustomerexcludingassessedtax',
+                'netincomeloss',
+                'operatingincomeloss',
+                'costofgoodsandservicessold',
+                'costofrevenue',
             }
             # Find all ix:nonFraction and ix:nonNumeric elements with us-gaap tags
             patterns = [
                 r'<ix:nonFraction([^>]*)name=["\']([^"\']*us-gaap:([^"\']+))["\'][^>]*>([^<]+)</ix:nonFraction>',
                 r'<ix:nonNumeric([^>]*)name=["\']([^"\']*us-gaap:([^"\']+))["\'][^>]*>([^<]+)</ix:nonNumeric>',
             ]
-            
+
             for pattern in patterns:
                 matches = re.findall(pattern, self.content, re.IGNORECASE)
                 for match in matches:
@@ -515,7 +746,7 @@ class XBRLParser(FilingParser):
                         attrs = match[0]  # Attributes string
                         tag_name = match[2] if len(match) > 2 else match[1]
                         value_str = match[-1] if len(match) > 3 else match[2]
-                        
+
                         # Clean value
                         value_str = re.sub(r'<[^>]+>', '', value_str)
                         value_str = re.sub(r'&#\d+;', ' ', value_str)
@@ -523,47 +754,59 @@ class XBRLParser(FilingParser):
                         if value_str.startswith('(') and value_str.endswith(')'):
                             value_str = f"-{value_str[1:-1]}"
                         value_str = value_str.replace(',', '')
-                        
+
                         # Try to convert to float
                         try:
                             value = float(value_str)
-                            
-                            # Handle scale attribute (same as _extract_first_numeric)
+
+                            # Handle scale attribute - convert to millions (Compustat standard)
                             scale_match = re.search(r'scale=["\']([-\d]+)["\']', attrs)
                             if scale_match:
                                 try:
-                                    value *= (10 ** int(scale_match.group(1)))
+                                    scale_int = int(scale_match.group(1))
+                                    # Convert to millions (scale=6 is baseline)
+                                    if scale_int != 6:
+                                        adjustment = scale_int - 6
+                                        value *= (10 ** adjustment)
                                 except ValueError:
                                     pass
-                            
+
+                            # Extract context reference for period type detection
+                            context_match = re.search(r'contextRef=["\']([^"\']+)["\']', attrs, re.IGNORECASE)
+                            context_ref = context_match.group(1) if context_match else ''
+                            period_type = self.get_period_type(context_ref)
+
                             # Use tag name as key (normalize)
                             key = tag_name.lower().replace('us-gaap:', '').replace(':', '_')
-                            if key in cash_flow_us_gaap_keys:
-                                # Prefer quarterly/QTD contexts over YTD for cash-flow totals.
-                                context_match = re.search(r'contextRef=["\']([^"\']+)["\']', attrs, re.IGNORECASE)
-                                context_ref = context_match.group(1) if context_match else ''
-                                context_lower = context_ref.lower()
-                                is_ytd = 'ytd' in context_lower or 'year' in context_lower or 'cumulative' in context_lower
-                                is_qtr = 'qtd' in context_lower or 'qtr' in context_lower or 'quarter' in context_lower
-                                if is_ytd:
-                                    priority = 1
-                                elif is_qtr:
-                                    priority = 3
-                                elif context_ref:
+
+                            # For period-sensitive items, prefer QTD over YTD
+                            if key in period_sensitive_keys:
+                                # Priority: QTD > UNKNOWN > YTD
+                                if period_type == 'QTD':
+                                    priority = 5
+                                elif period_type == 'INSTANT':
+                                    priority = 4
+                                elif period_type == 'UNKNOWN':
                                     priority = 2
-                                else:
-                                    priority = 0
+                                else:  # YTD variants
+                                    priority = 1
 
                                 prev = best_meta.get(key)
                                 if prev is None or priority > prev[0] or (priority == prev[0] and abs(value) > prev[1]):
-                                    best_meta[key] = (priority, abs(value))
+                                    best_meta[key] = (priority, abs(value), period_type)
                                     all_tags[key] = value
+                                    # Store period type for this tag
+                                    period_key = f"_period_type_{key}"
+                                    all_tags[period_key] = period_type  # type: ignore
                             else:
                                 if key not in all_tags or abs(value) > abs(all_tags[key]):
                                     all_tags[key] = value
+                                    # Store period type for non-sensitive items too
+                                    period_key = f"_period_type_{key}"
+                                    all_tags[period_key] = period_type  # type: ignore
                         except ValueError:
                             continue
-        
+
         return all_tags
     
     def _extract_security_data(self, data: Dict[str, Any]):

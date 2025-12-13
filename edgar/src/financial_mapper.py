@@ -1547,6 +1547,36 @@ class FinancialMapper:
         
         logger.info("Financial tables ensured")
 
+    def _normalize_scale(self, item: str, value: float, gvkey: str) -> float:
+        """
+        Normalize value scale based on item type.
+
+        NOTE: As of 2025-12-12, scale normalization is now handled in filing_parser.py
+        by properly interpreting the XBRL 'scale' attribute. Values are converted to
+        millions (Compustat standard) during extraction.
+
+        This function now only performs sanity checks for extremely suspicious values.
+        """
+        if value == 0:
+            return value
+
+        # Only flag extremely suspicious values (likely parsing errors)
+        # These thresholds are for values that are clearly wrong (e.g., 10^12 when expecting millions)
+        item_upper = item.upper()
+
+        # Per-share items should be reasonable
+        if item_upper in ('EPSPXQ', 'EPSFIQ', 'EPSPIQ', 'DVPSPQ', 'OEPSXQ'):
+            # EPS/DPS should typically be -1000 to +1000
+            if abs(value) > 100000:
+                logger.warning(f"Suspicious value for {item}: {value} (expected per-share range)")
+                # Don't auto-correct, just warn
+
+        # Balance sheet/income items in millions should be < 10 trillion
+        elif abs(value) > 10000000:  # > 10 trillion (in millions)
+            logger.warning(f"Suspicious normalized value for {item}: {value} (original: {value})")
+
+        return value
+
     def reset_ytd_tracker(self):
         """Clear cached YTD values and OCI accumulated values before populating new records."""
         self.ytd_tracker.clear()
@@ -1612,7 +1642,7 @@ class FinancialMapper:
                 date_str = re.sub(r'&#\d+;', ' ', date_str)
                 date_str = re.sub(r'\s+', ' ', date_str).strip()
                 date_str = date_str.split('\n')[0].split('OR')[0].strip()
-                
+
                 # Try different date formats
                 date_formats = [
                     '%Y-%m-%d',  # YYYY-MM-DD
@@ -1621,13 +1651,44 @@ class FinancialMapper:
                     '%m/%d/%Y',  # 06/30/2024
                     '%Y-%m-%d %H:%M:%S',  # With time
                 ]
+                parsed_date = None
                 for fmt in date_formats:
                     try:
-                        parsed = datetime.strptime(date_str[:30], fmt)
-                        fiscal_date = parsed.date()
+                        parsed_date = datetime.strptime(date_str[:30], fmt)
+                        fiscal_date = parsed_date.date()
                         break
                     except:
                         continue
+
+                # If parsing failed, try formats without year (e.g., "December 31", "June 30")
+                # and infer year from filing date
+                if parsed_date is None:
+                    date_formats_no_year = [
+                        '%B %d',  # December 31, June 30
+                        '%b %d',  # Dec 31, Jun 30
+                    ]
+                    for fmt in date_formats_no_year:
+                        try:
+                            parsed_no_year = datetime.strptime(date_str[:20], fmt)
+                            # Infer year from filing date
+                            # For 10-K filings: if period end is Dec 31 and filing is in Jan/Feb,
+                            # the period end year is filing_year - 1
+                            # For other cases: if period end month > filing month, use filing_year - 1
+                            inferred_year = filing_date.year
+                            if parsed_no_year.month > filing_date.month:
+                                # Period end is in a later month than filing, so it must be previous year
+                                # e.g., filing in Feb 2023, period end "December 31" -> Dec 31, 2022
+                                inferred_year = filing_date.year - 1
+                            elif parsed_no_year.month == filing_date.month and parsed_no_year.day > filing_date.day:
+                                # Same month but later day
+                                inferred_year = filing_date.year - 1
+
+                            from datetime import date as date_class
+                            fiscal_date = date_class(inferred_year, parsed_no_year.month, parsed_no_year.day)
+                            logger.debug(f"Inferred fiscal date {fiscal_date} from '{date_str}' (filing date: {filing_date})")
+                            break
+                        except:
+                            continue
             except Exception as e:
                 logger.debug(f"Could not parse fiscal date '{document_period_end_date}': {e}")
                 pass
@@ -1700,7 +1761,8 @@ class FinancialMapper:
             'effdate': filing_date,  # Effective date (filing date)
             'filing_type': filing_type,  # Store filing type for YTD conversion logic
             'items': {},
-            'xbrl_tags': {}  # Track which XBRL tag was used for each Compustat item
+            'xbrl_tags': {},  # Track which XBRL tag was used for each Compustat item
+            'period_types': {}  # Track period type (QTD, YTD_H1, YTD_9M, YTD_ANNUAL, INSTANT) for each item
         }
         
         # Map financial data to Compustat items
@@ -1755,10 +1817,17 @@ class FinancialMapper:
                         break
             if item_code and item_code != 'None':
                 try:
-                    mapped['items'][item_code] = float(value)
+                    raw_value = float(value)
+                    # Apply scale normalization
+                    normalized_value = self._normalize_scale(item_code, raw_value, gvkey)
+                    mapped['items'][item_code] = normalized_value
                     # Track XBRL tag for this mapping (critical for mapping learner)
                     if item_code not in mapped['xbrl_tags']:
                         mapped['xbrl_tags'][item_code] = key
+                    # Track period type from embedded _period_type_ keys
+                    period_type_key = f'_period_type_{normalized_key_clean}'
+                    if period_type_key in financial_data:
+                        mapped['period_types'][item_code] = financial_data[period_type_key]
                 except (ValueError, TypeError):
                     pass
         
@@ -1769,7 +1838,10 @@ class FinancialMapper:
             item_code = COMPUSTAT_ITEM_MAPPING.get(key)
             if item_code and item_code not in mapped['items']:
                 try:
-                    mapped['items'][item_code] = float(value)
+                    raw_value = float(value)
+                    # Apply scale normalization
+                    normalized_value = self._normalize_scale(item_code, raw_value, gvkey)
+                    mapped['items'][item_code] = normalized_value
                     # Track XBRL tag for legacy mappings
                     mapped['xbrl_tags'][item_code] = key
                 except (ValueError, TypeError):
@@ -1814,7 +1886,10 @@ class FinancialMapper:
             'PPENTQ': ['ppe_net', 'propertyplantandequipmentnet'],
             'GDWLQ': ['goodwill'],
             'INTANQ': ['intangible_assets', 'intangibleassetsnetexcludinggoodwill'],
-            'CHEQ': ['cashandcashequivalentsatcarryingvalue', 'cash'],
+            # CHEQ: Compustat defines as "Cash and Short-Term Investments"
+            # Prefer broader definitions that include short-term investments
+            'CHEQ': ['cashcashequivalentsandshortterminvestments', 'cashandshortterminvestments',
+                     'cashcashequivalentsandmarketablesecurities', 'cashandcashequivalentsatcarryingvalue', 'cash'],
             'IVSTQ': ['shortterminvestments'],
             'IVLTQ': ['investmentsnoncurrent'],
             'DLCQ': ['short_term_debt', 'currentportionoflongtermdebt'],
@@ -1979,6 +2054,31 @@ class FinancialMapper:
         self._calculate_share_eps_metrics(mapped, financial_data)
 
         # Calculate derived items
+
+        # CHEQ (Cash and Short-Term Investments): Some companies don't report a combined figure
+        # Compustat CHEQ = Cash + Short-term Investments (marketable securities)
+        # Always try to compute from components and use if larger than direct mapping
+        cash_val = 0
+        sti_val = 0
+        # Get cash from various possible keys
+        for cash_key in ['cashandcashequivalentsatcarryingvalue', 'cash', 'cashandcashequivalents']:
+            if cash_key in financial_data and isinstance(financial_data[cash_key], (int, float)):
+                cash_val = financial_data[cash_key]
+                break
+        # Get short-term investments from various possible keys
+        for sti_key in ['marketablesecurities', 'marketablesecuritiescurrent', 'shortterminvestments',
+                       'availableforsalesecuritiescurrent', 'availableforsaledebtsecuritiescurrent']:
+            if sti_key in financial_data and isinstance(financial_data[sti_key], (int, float)):
+                sti_val = financial_data[sti_key]
+                break
+        if cash_val > 0 or sti_val > 0:
+            computed_cheq = cash_val + sti_val
+            # Use computed value if it's larger than existing (or no existing)
+            # This handles cases where CHEQ was mapped to just cash, but should include STI
+            if computed_cheq > mapped['items'].get('CHEQ', 0):
+                mapped['items']['CHEQ'] = computed_cheq
+                logger.debug(f"Computed CHEQ = {cash_val} (cash) + {sti_val} (STI) = {computed_cheq}")
+
         # EBITDA = Operating Income + Depreciation & Amortization
         if 'OIADPQ' in mapped['items'] and 'DPQ' in mapped['items']:
             mapped['items']['OIBDPQ'] = mapped['items']['OIADPQ'] + mapped['items']['DPQ']
@@ -3004,17 +3104,34 @@ class FinancialMapper:
             mapped['items']['FLMTQ'] = mapped['items'].get('FLMIQ', 0.0)
         
         # Calculate 12-month trailing items if we have quarterly data
-        # (This would require aggregating across quarters - skip for now, 
+        # (This would require aggregating across quarters - skip for now,
         #  but we can try to use extracted 12-month values if available)
         # Note: Many 12-month items are calculated above as approximations (quarterly * 4)
         # For more accuracy, we would need to aggregate across multiple quarters
-        
+
+        # ========================================================================
+        # CRITICAL FIX: Compute DLTTQ and DLCQ including lease liabilities
+        # Compustat's DLTTQ and DLCQ include operating and finance lease liabilities
+        # in addition to traditional debt. This computation ensures we match Compustat.
+        # ========================================================================
+        self._compute_debt_with_leases(mapped, financial_data)
+
         return mapped
     
     def process_ytd_conversion(self, mapped_data: Dict[str, Any], filing_type: str):
         """
         Convert year-to-date reported metrics to quarterly figures.
-        Handles both explicit YTD values (common in 10-K) and Quarterly values.
+
+        NEW APPROACH: Use period_type extracted from XBRL context to determine
+        if a value is QTD (quarterly) or YTD (cumulative). This is more reliable
+        than trying to infer from value comparisons.
+
+        Period types:
+        - QTD: Single quarter (~90 days) - no conversion needed
+        - YTD_H1: 6 months (~180 days) - subtract Q1 to get Q2
+        - YTD_9M: 9 months (~270 days) - subtract Q1+Q2 to get Q3
+        - YTD_ANNUAL: 12 months (~365 days) - subtract Q1+Q2+Q3 to get Q4
+        - INSTANT: Balance sheet point-in-time - no conversion needed
         """
         filing_type = (filing_type or '').upper()
         # Process all filings that might contain financial data, not just 10-Q/10-K
@@ -3026,11 +3143,27 @@ class FinancialMapper:
         fiscal_year = mapped_data['fiscal_year']
         fiscal_quarter = mapped_data['fiscal_quarter']
         sign_invert_items = {'IVNCFQ'}
-        
+        period_types = mapped_data.get('period_types', {})
+
+        # Import YTD conversion utilities at the top of function
+        try:
+            from improve_ytd_conversion import detect_if_ytd, convert_ytd_to_quarterly, validate_ytd_conversion
+            ytd_improvements_available = True
+        except ImportError:
+            ytd_improvements_available = False
+            # Define fallback functions
+            def convert_ytd_to_quarterly(value, prev_ytd, quarter, filing_type, item):
+                if prev_ytd is not None:
+                    return value - prev_ytd, 0.7
+                return value, 0.3
+
+            def validate_ytd_conversion(qtr_val, ytd_val, prev_ytd, item):
+                return True, None
+
         # Debug: Log all YTD conversions for MSFT
         if str(gvkey) == '012141':
             logger.info(f"Processing YTD conversion for MSFT: FY={fiscal_year}, Q={fiscal_quarter}, FilingType={filing_type}, "
-                       f"Items={list(mapped_data['items'].keys())[:5]}...")
+                       f"Items={list(mapped_data['items'].keys())[:5]}, PeriodTypes={list(period_types.keys())[:5]}...")
 
         for item in YTD_ITEMS:
             if item not in mapped_data['items']:
@@ -3218,57 +3351,71 @@ class FinancialMapper:
                             mapped_data['items'][item] = -mapped_data['items'][item]
                     continue
 
-            # IMPROVED YTD DETECTION LOGIC
-            # Use enhanced detection with multiple heuristics and confidence scoring
-            # Check if YTD improvements are available
-            try:
-                from improve_ytd_conversion import detect_if_ytd, convert_ytd_to_quarterly, validate_ytd_conversion
-                ytd_improvements_available = True
-            except ImportError:
-                ytd_improvements_available = False
-            
-            if ytd_improvements_available:
-                # Detect if value is YTD or quarterly
-                is_input_ytd, detection_confidence = detect_if_ytd(
-                    current_value, previous_ytd, fiscal_quarter, filing_type, item
-                )
-                
-                # Log low-confidence detections for review
-                if detection_confidence < 0.7:
-                    logger.debug(f"Low confidence YTD detection for {gvkey} {item} Q{fiscal_quarter}: "
-                               f"is_ytd={is_input_ytd}, confidence={detection_confidence:.2f}, "
-                               f"value={current_value}, prev_ytd={previous_ytd}")
-                
-                # Override with high-confidence rules
-                if is_annual_filing and is_q4:
-                    # 10-K Q4 is strictly Annual (YTD) for Income Statement items
-                    is_input_ytd = True
-                    detection_confidence = 1.0
-                elif current_value > 0 and current_value < previous_ytd:
-                    # Value is smaller than previous YTD - definitely QTR
-                    is_input_ytd = False
-                    detection_confidence = 0.9
+            # NEW: Use period_type from XBRL context as PRIMARY indicator
+            # This is the most reliable way to determine if value is YTD or QTD
+            item_period_type = period_types.get(item, 'UNKNOWN')
+
+            # Determine if value is YTD based on XBRL context period type
+            if item_period_type in ('YTD_H1', 'YTD_9M', 'YTD_ANNUAL'):
+                # XBRL says this is a cumulative value - trust it
+                is_input_ytd = True
+                detection_confidence = 0.95  # High confidence from XBRL
+                logger.debug(f"XBRL period_type={item_period_type} indicates YTD for {gvkey} {item} Q{fiscal_quarter}")
+            elif item_period_type == 'QTD':
+                # XBRL says this is quarterly - trust it
+                is_input_ytd = False
+                detection_confidence = 0.95  # High confidence from XBRL
+                logger.debug(f"XBRL period_type=QTD indicates quarterly for {gvkey} {item} Q{fiscal_quarter}")
+            elif item_period_type == 'INSTANT':
+                # Balance sheet item - shouldn't be in YTD_ITEMS, but skip conversion
+                is_input_ytd = False
+                detection_confidence = 0.95
             else:
-                # Fallback to legacy logic
-                detection_confidence = 0.5
-                ratio = abs(current_value) / abs(previous_ytd) if abs(previous_ytd) > 1e-6 else 0
-                
-                if is_annual_filing and is_q4:
-                    is_input_ytd = True
-                elif is_10q and fiscal_quarter in (2, 3):
-                    if ratio > 1.5:
+                # UNKNOWN period type - fall back to heuristics
+                # IMPROVED YTD DETECTION LOGIC
+                # Use enhanced detection with multiple heuristics and confidence scoring
+                if ytd_improvements_available:
+                    # Detect if value is YTD or quarterly
+                    is_input_ytd, detection_confidence = detect_if_ytd(
+                        current_value, previous_ytd, fiscal_quarter, filing_type, item
+                    )
+
+                    # Log low-confidence detections for review
+                    if detection_confidence < 0.7:
+                        logger.debug(f"Low confidence YTD detection for {gvkey} {item} Q{fiscal_quarter}: "
+                                   f"is_ytd={is_input_ytd}, confidence={detection_confidence:.2f}, "
+                                   f"value={current_value}, prev_ytd={previous_ytd}")
+
+                    # Override with high-confidence rules
+                    if is_annual_filing and is_q4:
+                        # 10-K Q4 is strictly Annual (YTD) for Income Statement items
                         is_input_ytd = True
-                    elif ratio > 1.1:
-                        expected_ytd_ratio = fiscal_quarter
-                        is_input_ytd = ratio >= expected_ytd_ratio * 0.8
+                        detection_confidence = 1.0
                     elif current_value > 0 and current_value < previous_ytd:
+                        # Value is smaller than previous YTD - definitely QTR
                         is_input_ytd = False
-                    else:
-                        is_input_ytd = ratio >= 1.2
-                elif ratio > 1.2:
-                    is_input_ytd = True
+                        detection_confidence = 0.9
                 else:
-                    is_input_ytd = False
+                    # Fallback to legacy logic (no ytd_improvements module)
+                    detection_confidence = 0.5
+                    ratio = abs(current_value) / abs(previous_ytd) if abs(previous_ytd) > 1e-6 else 0
+
+                    if is_annual_filing and is_q4:
+                        is_input_ytd = True
+                    elif is_10q and fiscal_quarter in (2, 3):
+                        if ratio > 1.5:
+                            is_input_ytd = True
+                        elif ratio > 1.1:
+                            expected_ytd_ratio = fiscal_quarter
+                            is_input_ytd = ratio >= expected_ytd_ratio * 0.8
+                        elif current_value > 0 and current_value < previous_ytd:
+                            is_input_ytd = False
+                        else:
+                            is_input_ytd = ratio >= 1.2
+                    elif ratio > 1.2:
+                        is_input_ytd = True
+                    else:
+                        is_input_ytd = False
             
             if is_input_ytd:
                 # Input is YTD. Convert to quarterly using improved logic.
@@ -3330,6 +3477,135 @@ class FinancialMapper:
                 self.ytd_tracker[key] = new_ytd
                 if item in sign_invert_items:
                     mapped_data['items'][item] = -mapped_data['items'][item]
+
+    def _compute_debt_with_leases(self, mapped_data: Dict[str, Any], financial_data: Dict[str, Any]):
+        """
+        Compute DLTTQ and DLCQ to include lease liabilities (matching Compustat methodology).
+
+        Compustat's definitions:
+        - DLTTQ (Long-Term Debt - Total Quarterly) includes:
+          * Long-term debt (non-current portion)
+          * Operating lease liabilities (non-current)
+          * Finance lease liabilities (non-current)
+
+        - DLCQ (Debt in Current Liabilities - Quarterly) includes:
+          * Current portion of long-term debt
+          * Commercial paper
+          * Short-term borrowings
+          * Operating lease liabilities (current)
+          * Finance lease liabilities (current)
+
+        This fix is CRITICAL for matching Compustat values which typically include
+        all forms of debt obligations including lease liabilities under ASC 842.
+        """
+        items = mapped_data['items']
+
+        # Helper to get value from financial_data (XBRL tags are lowercase)
+        def get_xbrl_value(tags):
+            for tag in tags:
+                normalized = tag.lower().replace('_', '').replace('-', '').replace(' ', '')
+                if normalized in financial_data:
+                    val = financial_data[normalized]
+                    if isinstance(val, (int, float)):
+                        return float(val)
+            return 0.0
+
+        # ========================================================================
+        # DLTTQ: Long-Term Debt Total (Non-Current)
+        # ========================================================================
+        # Component 1: Long-term debt (non-current portion)
+        lt_debt_noncurrent = get_xbrl_value([
+            'LongTermDebtNoncurrent',
+            'LongTermDebt',  # Fallback if non-current not available
+            'DebtNoncurrent',
+        ])
+
+        # Component 2: Operating lease liabilities (non-current)
+        op_lease_noncurrent = get_xbrl_value([
+            'OperatingLeaseLiabilityNoncurrent',
+        ])
+
+        # Component 3: Finance lease liabilities (non-current)
+        # Finance lease liability total minus current portion
+        fin_lease_total = get_xbrl_value([
+            'FinanceLeaseLiability',
+        ])
+        fin_lease_current = get_xbrl_value([
+            'FinanceLeaseLiabilityPaymentsDueNextTwelveMonths',
+            'FinanceLeaseCurrentLiabilityPaymentsDueNextTwelveMonths',
+            'FinanceLeaseLiabilityCurrent',
+        ])
+        fin_lease_noncurrent = max(0, fin_lease_total - fin_lease_current) if fin_lease_total > 0 else 0.0
+
+        # Compute DLTTQ
+        computed_dlttq = lt_debt_noncurrent + op_lease_noncurrent + fin_lease_noncurrent
+
+        # Normalize to millions (Compustat standard) if value is in raw units
+        # Raw SEC values are in dollars; Compustat stores in millions
+        if computed_dlttq > 1e9:  # Value > 1 billion means it's in raw dollars
+            computed_dlttq = computed_dlttq / 1e6
+
+        # Normalize existing value for comparison (might also be in raw units)
+        existing_dlttq = items.get('DLTTQ', 0)
+        existing_dlttq_normalized = existing_dlttq / 1e6 if existing_dlttq > 1e9 else existing_dlttq
+
+        # Only override if we have a more complete value (i.e., includes lease liabilities)
+        if computed_dlttq > existing_dlttq_normalized * 1.1:  # Use computed if significantly larger (10% threshold)
+            items['DLTTQ'] = computed_dlttq
+            logger.debug(f"Computed DLTTQ = {computed_dlttq:.0f}M (includes lease liabilities, was {existing_dlttq_normalized:.0f}M)")
+
+        # ========================================================================
+        # DLCQ: Debt in Current Liabilities
+        # ========================================================================
+        # Component 1: Current portion of long-term debt
+        lt_debt_current = get_xbrl_value([
+            'LongTermDebtCurrent',
+            'CurrentPortionOfLongTermDebt',
+        ])
+
+        # Component 2: Commercial paper
+        commercial_paper = get_xbrl_value([
+            'CommercialPaper',
+        ])
+
+        # Component 3: Short-term borrowings
+        st_borrowings = get_xbrl_value([
+            'ShortTermBorrowings',
+            'ShortTermDebt',
+        ])
+
+        # Component 4: Operating lease liabilities (current)
+        # Calculate as total - non-current
+        op_lease_total = get_xbrl_value([
+            'OperatingLeaseLiability',
+        ])
+        op_lease_current = max(0, op_lease_total - op_lease_noncurrent) if op_lease_total > 0 else 0.0
+
+        # Also try direct current tag
+        op_lease_current_direct = get_xbrl_value([
+            'OperatingLeaseLiabilityCurrent',
+        ])
+        if op_lease_current_direct > 0:
+            op_lease_current = op_lease_current_direct
+
+        # Component 5: Finance lease liabilities (current)
+        # Already calculated above as fin_lease_current
+
+        # Compute DLCQ
+        computed_dlcq = lt_debt_current + commercial_paper + st_borrowings + op_lease_current + fin_lease_current
+
+        # Normalize to millions (Compustat standard) if value is in raw units
+        if computed_dlcq > 1e9:  # Value > 1 billion means it's in raw dollars
+            computed_dlcq = computed_dlcq / 1e6
+
+        # Normalize existing value for comparison (might also be in raw units)
+        existing_dlcq = items.get('DLCQ', 0)
+        existing_dlcq_normalized = existing_dlcq / 1e6 if existing_dlcq > 1e9 else existing_dlcq
+
+        # Only override if we have a more complete value
+        if computed_dlcq > existing_dlcq_normalized * 1.1:  # Use computed if significantly larger (10% threshold)
+            items['DLCQ'] = computed_dlcq
+            logger.debug(f"Computed DLCQ = {computed_dlcq:.0f}M (includes lease liabilities, was {existing_dlcq_normalized:.0f}M)")
 
     def _ensure_receivable_breakouts(self, mapped_data: Dict[str, Any], financial_data: Dict[str, Any]):
         items = mapped_data['items']
@@ -3735,86 +4011,32 @@ class FinancialMapper:
     
     def _normalize_items(self, items: Dict[str, float]):
         """
-        Normalize item values to Compustat standards (usually Millions).
-        Most Compustat financial items are in Millions.
-        Per-share items, Prices, and Ratios are usually absolute.
-        
-        Smart normalization: If values are already in millions (reasonable range),
-        don't normalize. If they're in raw dollars (billions), normalize.
+        Validate and log item values.
+
+        NOTE: As of 2025-12-12, scale normalization is now handled in filing_parser.py
+        by properly interpreting the XBRL 'scale' attribute. Values are already converted
+        to millions (Compustat standard) during extraction.
+
+        This function now only performs validation checks and logs suspicious values.
+        No rescaling is performed to avoid double-normalization issues.
         """
         for item, value in items.items():
-            # Check if item should be preserved as is (Absolute)
-            # EPS: Earnings Per Share
-            # DVPS: Dividends Per Share
-            # PRC: Price (PRCCQ, etc.)
-            # AJEXQ: Adjustment Factor
-            is_per_share = item.startswith('EPS') or item.startswith('DVPS')
-            is_price = item.startswith('PRC')
-            is_ratio = item in ['AJEXQ', 'TRFD'] 
-            
-            if is_per_share or is_price or is_ratio:
-                continue
-            
-            # IMPROVED: Better unit detection and normalization
-            # Smart detection: If value is already in millions (reasonable range: 0.1 to 10,000,000),
-            # don't normalize. If it's in raw dollars (billions: > 10,000,000), normalize.
-            # This handles cases where parser already normalized or didn't apply scale correctly.
             abs_value = abs(value)
-            
-            # Track if we've normalized to prevent double normalization
-            normalized = False
 
-            # Heuristic: some filings report dollars instead of millions; scale up by 1,000
-            # for high-magnitude items when values are in the tens of thousands.
-            scale_up_candidates = {'REVTQ', 'SALEQ', 'ATQ', 'CEQQ', 'CHEQ', 'OIADPQ', 'NIQ', 'LTQ'}
-            if item in scale_up_candidates and 1_000 <= abs_value < 1_000_000:
-                value = value * 1_000
-                abs_value = abs(value)
-                # Track the rescaled value for downstream logic
-                items[item] = value
+            # Per-share items should be in reasonable range (-1000 to +1000)
+            is_per_share = item.startswith('EPS') or item.startswith('DVPS')
+            if is_per_share and abs_value > 10000:
+                logger.warning(f"Suspicious per-share value for {item}: {value}")
 
-            # Cash-flow items are often extracted in thousands when inline XBRL scale is missed.
-            # If values are implausibly large for quarterly cash flows, scale down by 1,000.
-            cash_flow_items = {'OANCFQ', 'IVNCFQ', 'FINCFQ'}
-            if item in cash_flow_items and 100_000 <= abs_value < 10_000_000:
-                value = value / 1_000.0
-                abs_value = abs(value)
-                items[item] = value
+            # Financial items in millions should be < 10 trillion
+            # (largest companies have ~$500B revenue, so 500,000 in millions)
+            if not is_per_share and abs_value > 10_000_000:
+                logger.warning(f"Suspicious value for {item}: {value} (seems too large, may be in wrong units)")
 
-            # LTQ-specific fallback: if still very small, assume thousands and scale
-            if item == 'LTQ' and abs_value > 0 and abs_value < 5_000:
-                value = value * 1_000
-                items[item] = value
-            
-            if abs_value > 10_000_000:
-                # Value is in raw dollars (billions), normalize to millions
-                items[item] = value / 1_000_000.0
-                normalized = True
-            elif abs_value < 0.1 and abs_value > 0:
-                # Value is suspiciously small (might be double-normalized), try to fix
-                # But be careful - some items might legitimately be small
-                # Only fix if it's clearly wrong (like 0.061858 for revenue)
-                large_value_items = ['REVTQ', 'SALEQ', 'ATQ', 'LTQ', 'NIQ', 'COGSQ', 'XSGAQ', 
-                                   'DLTTQ', 'CHEQ', 'PPENTQ', 'OANCFQ']
-                if item in large_value_items and abs_value < 1:
-                    # Likely double-normalized, multiply by 1M
-                    items[item] = value * 1_000_000.0
-                    normalized = True
-            
-            # IMPROVEMENT: Validate normalized value is reasonable
-            if normalized:
-                final_value = abs(items[item])
-                # Check if normalized value is in reasonable range for this item type
-                if item.startswith('EPS') or item.startswith('DVPS'):
-                    # Per-share items should be small
-                    if final_value > 1000:
-                        logger.warning(f"Suspicious normalized value for {item}: {items[item]} (original: {value})")
-                else:
-                    # Financial items should be in millions range
-                    if final_value > 10_000_000:
-                        logger.warning(f"Suspicious normalized value for {item}: {items[item]} (original: {value})")
-            
-            # Otherwise, assume value is already in millions (reasonable range)
+            # Values that are suspiciously small might indicate extraction issues
+            large_value_items = {'REVTQ', 'SALEQ', 'ATQ', 'LTQ', 'CEQQ'}
+            if item in large_value_items and 0 < abs_value < 1:
+                logger.warning(f"Suspicious value for {item}: {value} (seems too small for this item type)")
 
     def close(self):
         """Close database connection."""

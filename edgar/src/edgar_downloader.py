@@ -227,7 +227,9 @@ class EdgarDownloader:
         company_dir.mkdir(parents=True, exist_ok=True)
         
         # Create filename: {form_type}_{accession_number}.txt
-        output_filename = f"{form_type}_{accession_number}.txt"
+        # Some form types include '/' (e.g., "10-K/A"), which would be treated as a path separator.
+        safe_form_type = form_type.replace("/", "-")
+        output_filename = f"{safe_form_type}_{accession_number}.txt"
         output_path = company_dir / output_filename
         
         if output_path.exists():
